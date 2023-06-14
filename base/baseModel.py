@@ -5,7 +5,7 @@ from tqdm import tqdm
 import shutil
 from tensorboardX import SummaryWriter
 from .networks import get_network
-import numpy
+
 
 class BaseModel(ABC):
     def __init__(self, cfg):
