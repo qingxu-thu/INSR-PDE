@@ -106,11 +106,16 @@ def PoU(x):
     x_o = torch.where((x>=(3/4)&(x<5/4)),.5-torch.sin(2*torch.pi*x)/2,x_o)
     return x_o
 
+def PoU_simple(x):
+    x_o = torch.zeros_like(x)
+    x_o = torch.where((x>=(-1)&(x<=1)),.1,x_o)
+    return x_o
 
 class Random_Basis_Function(object):
     # input for the layer is set for [-1,1]
-    def  __init__(self,num_per_point_feature,num_time_feature,num_spatial_basis,num_spatial_basis_pos,highest_order,dim=2):
-        self.PoU = torch.randn((num_spatial_basis_pos,dim))
+    def  __init__(self,num_per_point_feature,num_time_feature,num_spatial_basis,num_spatial_basis_pos,band_width,dim=2):
+        self.basis_point = torch.randn((num_spatial_basis_pos,dim))
+        self.band_width = band_width
         self.spatial_A = torch.randn((num_spatial_basis,num_per_point_feature,dim))
         self.spatial_B = torch.randn((num_spatial_basis,num_per_point_feature))
         self.time_A = torch.randn((num_time_feature,num_spatial_basis,num_per_point_feature,dim))
@@ -118,7 +123,19 @@ class Random_Basis_Function(object):
         self.PoU = PoU
         self.x_process = x_procss
         self.non_linear = nn.Sigmoid()
-    
-    def cal_value(x):
+        
+
+    def derive_order_operator(self,x,norm):
+        # for Sigmoid for highest order 2
+        L_1 = self.spatial_A[None,...] * (1-x)*x
+        L_2 = self.spatial_A[None,...] *(1-2*x) * L_1
+        B_1 = torch.einsum('ijk,ak->aijk',L_1,norm)
+        return L_1, L_2, B_1
+
+    def cal_homo(self,x,t):
+        x_ = self.x_process(x,self.basis_point,self.band_width)
+        x_ = torch.einsum('')
+        x = 
+        
         
         
