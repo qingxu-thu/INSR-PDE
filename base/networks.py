@@ -166,7 +166,7 @@ class Random_Basis_Function(object):
         L2 = torch.einsum('qn,qt,qtnjdd->qtnjdd',x_weight,t_weight,L2)
         Lt = torch.einsum('qn,qt,qtnj->qtnj',x_weight,t_weight,Lt)
         if norm is not None:
-            B1 = torch.einsum('qn,qt,qtnjd->qtnjd',x_weight[boundary],t_weight[boundary],B1)
+            B1 = torch.einsum('qn,qt,qtnjd->qtnj',x_weight[boundary],t_weight[boundary],B1)
         return L1,L2,Lt,B1,ot
     
     def get_sparsity(self,x,t):
