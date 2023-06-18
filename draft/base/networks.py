@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from pytorch3d.ops import knn_points,knn_gather
+# from pytorch3d.ops import knn_points,knn_gather
 from tensorboardX import SummaryWriter
 import os
 import shutil
