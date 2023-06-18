@@ -5,6 +5,7 @@ from pytorch3d.ops import knn_points,knn_gather
 from tensorboardX import SummaryWriter
 import os
 import shutil
+import math
 
 def get_network(cfg, in_features, out_features):
     if cfg.network == 'siren':
@@ -125,23 +126,36 @@ class Random_Basis_Function(object):
     # input for the layer is set for [-1,1]
     def  __init__(self,cfg):
         self.cfg = cfg
-        num_per_point_feature = cfg.num_per_point_feature
-        num_time_feature = cfg.num_time_feature
-        num_spatial_basis = cfg.num_spatial_basis
-        num_spatial_basis_pos = cfg.num_spatial_basis_pos
-        band_width = cfg.band_width
-        variable_num = cfg.variable_num
-        dim = cfg.dim
-        self.basis_point = torch.randn((num_spatial_basis_pos,dim))
-        self.band_width = band_width
-        self.spatial_A = torch.randn((num_time_feature,num_spatial_basis,variable_num,num_per_point_feature,dim))
-        self.time_A = torch.randn((num_time_feature,num_spatial_basis,variable_num,num_per_point_feature))
-        self.bias = torch.randn((num_time_feature,num_spatial_basis,variable_num,num_per_point_feature))
+        self.num_per_point_feature = cfg.num_per_point_feature
+        self.num_time_feature = cfg.time_num
+        self.time_length = self.cfg.time_length
+        self.num_spatial_basis = cfg.num_spatial_basis
+        self.band_width = cfg.band_width
+        self.variable_num = cfg.variable_num
+        self.dim = cfg.dim
+        self.device = cfg.device
+        self.basis_point,self.basis_time = self.generate_basis(self.num_spatial_basis,self.num_time_feature,self.time_length,self.dim)
+        self.band_width = cfg.band_width
+        self.spatial_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,self.dim))
+        self.time_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature))
+        self.bias = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature))
         self.PoU = PoU_simple
         self.x_process = x_process
         self.t_process = t_process
         self.non_linear = nn.Sigmoid()
-        
+        self.tb = None
+
+
+    def generate_basis(self,pos_num,time_num,end_time,dim):
+        resolution = math.pow(pos_num,1/dim)
+        coords = torch.linspace(0.5, resolution - 0.5, resolution, device=self.device) / resolution * 2 - 1
+        coords = torch.stack(torch.meshgrid([coords] * dim, indexing='ij'), dim=-1)
+        coords = coords.reshape(resolution**dim, dim)
+        length, dim = coords.shape[-1]
+        t =  torch.linspace(0,end_time,time_num).unsqueeze(1).repeat(1,length).reshape(-1,1)
+        coords = coords.unsqeeze(0).repeat(time_num,1,1)
+        coords = coords.reshape(-1,dim)
+        return coords,t
 
     def derive_order_operator(self,x_,boundary=None,norm=None):
         # for Sigmoid for highest order 2
@@ -156,17 +170,13 @@ class Random_Basis_Function(object):
             B_1 = torch.einsum('qtnejd,qd->qtnejd',L_1[boundary],norm)
         return L_1, L_2, L_t, B_1
 
-    def derive_t_operator(self,x,norm):
-        # for Sigmoid for highest order 2
-        L_t = self.spatial_t[None,...] * (1-x)*x
-        return L_t
 
     def cal_homo(self,x,t,boundary=None,norm=None):
         x_ = self.x_process(x,self.basis_point,self.band_width)
         # We need to implement a KNN version for the martix recon
         # Here we just use a meshed version (Maybe Hashing??)
         sptail_val = torch.einsum('tnejd,qnd->qtnej',self.spatial_A,x_)
-        t_ =self.t_process(t)
+        t_ =self.t_process(t,self.basis_time,self.time_length/self.num_time_feature)
         x_weight,t_weight = self.get_sparsity(x_,t_)
 
         time_val = torch.einsum('tnej,qt->qtnej',self.time_A,t_)
@@ -187,7 +197,7 @@ class Random_Basis_Function(object):
         # We need to implement a KNN version for the martix recon
         # Here we just use a meshed version (Maybe Hashing??)
         sptail_val = torch.einsum('tnejd,qnd->qtnej',self.spatial_A,x_)
-        t_ =self.t_process(t)
+        t_ =self.t_process(t,self.basis_time,self.time_length/self.num_time_feature)
         x_weight,t_weight = self.get_sparsity(x_,t_)
 
         time_val = torch.einsum('tnej,qt->qtnej',self.time_A,t_)
