@@ -6,6 +6,8 @@ from tensorboardX import SummaryWriter
 import os
 import shutil
 import math
+import diff_ops
+
 
 def get_network(cfg, in_features, out_features):
     if cfg.network == 'siren':
@@ -202,7 +204,7 @@ class Random_Basis_Function(object):
 
         time_val = torch.einsum('tnej,qt->qtnej',self.time_A,t_)
         ot = self.non_linear(sptail_val+time_val+self.bias)
-        ot = torch.einsum('tnej,qtnej->qtne',u,ot,ot)
+        ot = torch.einsum('tnej,qtnej->qtne',u,ot)
         ot = torch.einsum('qn,qt,qtne->qe',x_weight,t_weight,ot)
         return ot
 
@@ -221,31 +223,166 @@ class Random_Basis_Function(object):
         self.tb = SummaryWriter(self.log_path)
     
 
+
+def gather_use(A,idx):
+    A = A.expand(idx.shape[0],-1,-1)
+    idx = idx.expand(-1,-1,A.shape[1])
+    A = torch.gather(A,1,idx)
+    return A
+
+# KNN spatial implementation for a higher number 
+class Random_Basis_Function_L(object):
+    # input for the layer is set for [-1,1]
+    def  __init__(self,cfg):
+        self.cfg = cfg
+        self.num_per_point_feature = cfg.num_per_point_feature
+        self.num_time_feature = cfg.time_num
+        self.time_length = self.cfg.time_length
+        self.time_band_width = self.time_length/self.num_per_point_feature
+        self.num_spatial_basis = cfg.num_spatial_basis
+        self.variable_num = cfg.variable_num
+        self.dim = cfg.dim
+        self.device = cfg.device
+        self.neighbor_K = cfg.neighbor_K
+        self.basis_point,self.basis_time = self.generate_basis(self.num_spatial_basis,self.num_time_feature,self.time_length,self.dim)
+        self.band_width = cfg.band_width
+        self.spatial_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,self.dim))
+        self.time_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature))
+        self.bias = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature))
+        self.u_ = torch.nn.Parameter(torch.randn(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature))
+        self.PoU = PoU_simple
+        self.non_linear = nn.Sigmoid()
+        self.tb = None
+
+    def x_process(x,x_0,bandwidth):
+        x = (x[:,None,:]-x_0[:,:,:])/bandwidth
+        return x
+
+    def t_process(t,t_0,bandwidth):
+        t = (t[:,None]-t_0[:,:])/bandwidth
+        return t
+
+    def generate_basis(self,pos_num,time_num,end_time,dim):
+        resolution = math.pow(pos_num,1/dim)
+        coords = torch.linspace(0.5, resolution - 0.5, resolution, device=self.device) / resolution * 2 - 1
+        coords = torch.stack(torch.meshgrid([coords] * dim, indexing='ij'), dim=-1)
+        coords = coords.reshape(resolution**dim, dim)
+        length, dim = coords.shape[-1]
+        t =  torch.linspace(0,end_time,time_num).unsqueeze(1).repeat(1,length).reshape(-1,1)
+        coords = coords.unsqeeze(0).repeat(time_num,1,1)
+        coords = coords.reshape(-1,dim)
+        return coords,t
+
+    def _create_tb(self, name, overwrite=True):
+        """create tensorboard log"""
+        self.log_path = os.path.join(self.cfg.log_dir, name)
+        if os.path.exists(self.log_path) and overwrite:
+            shutil.rmtree(self.log_path, ignore_errors=True)
+        if self.tb is not None:
+            self.tb.close()
+        self.tb = SummaryWriter(self.log_path)
+
+    # we only search for the spatial discretization but time is divided equally.
+    def neighbor_search(self,x_,t_):
+        # Need to expand self.basis_pts
+        x_ = torch.cat([x_,t_],dim=1)
+        bz = x_.shape[0]
+        plex = torch.cat([self.basis_point,self.basis_time],dim=1).expand(bz,-1,-1)
+        x_[:,-1] *= (self.band_width/self.time_band_width)
+        plex[:,-1] *= (self.band_width/self.time_band_width)
+        x_ = x_.unsqueeze(1)
+        _,idx = knn_points(x_,plex,self.neighbor_K)
+        p_reduce = knn_gather(self.basis_point,idx)
+        # Might be some problem with x_process
+        #—p_reduce: bz,1,k,tdim
+        x_0 = p_reduce[...,:-1]
+        t_0 = p_reduce[...,-1]*(self.time_band_width/self.band_width)
+        x_0 = x_0.reshape(bz,)
+        x_ = self.x_process(x_,x_0,self.band_width)
+        t_ = self.t_process(t_,t_0,self.time_band_width)
+        return x_,t_,idx
+
+    def forward(self,x_,t_,boundary=None,norm=None):
+        x_,t_,idx = self.neighbor_search(x_,t_)
+        total_ = self.num_time_feature*self.num_spatial_basis
+        A_process = self.spatial_A.reshape(total_,-1)
+        A_process = torch.gather(A_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature,self.dim)
+        t_process_ = self.time_A.reshape(total_,-1)
+        t_process_ = torch.gather(t_process_,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        bias_process = self.bias.reshape(total_,-1)
+        bias_process = torch.gather(bias_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        u_process = self.u_.reshape(total_,-1)
+        u_process = torch.gather(u_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
+        time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
+        ot = self.non_linear(sptail_val+time_val+self.bias)
+        #A,t,b: qhej; u:qhej
+        x_weight,t_weight = self.get_sparsity(x_,t_)
+        #x_weight, t_weight: qh,qh
+        ot = x_weight*t_weight*u_process*ot
+        ot = torch.sum(torch.sum(ot,dim=-1),dim=1)
+        L1 = diff_ops.gradient(ot, x_)
+        L2 = diff_ops.hessian(ot.unsqueeze(-1), x_.unsqueeze(1).repeat(1,ot.shape[1],1))
+        Lt = diff_ops.gradient(ot, t_)
+        B1 = None
+        if norm is not None:
+            B1 = L1[boundary] * norm.unsqeeze(1)
+        return L1,L2,Lt,B1,ot
     
+    def matrix_ids(self,x_,t_,boundary=None,norm=None):
+        x_,t_,idx = self.neighbor_search(x_,t_)
+        total_ = self.num_time_feature*self.num_spatial_basis
+        A_process = self.spatial_A.reshape(total_,-1)
+        A_process = torch.gather(A_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature,self.dim)
+        t_process_ = self.time_A.reshape(total_,-1)
+        t_process_ = torch.gather(t_process_,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        bias_process = self.bias.reshape(total_,-1)
+        bias_process = torch.gather(bias_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        # u_process = self.u_.reshape(total_,-1)
+        # u_process = torch.gather(u_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
+        time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
+        ot = self.non_linear(sptail_val+time_val+self.bias)
+        #A,t,b: qhej; u:qhej
+        x_weight,t_weight = self.get_sparsity(x_,t_)
+        #x_weight, t_weight: qh,qh
+        ot = x_weight*t_weight*ot
+        L1 = diff_ops.gradient(ot, x_)
+        L2 = diff_ops.hessian(ot.unsqueeze(-1), x_.unsqueeze(1).repeat(1,ot.shape[1],1))
+        Lt = diff_ops.gradient(ot, t_)
+        B1 = None
+        if norm is not None:
+            B1 = L1[boundary] * norm.unsqeeze(1)
+        return L1,L2,Lt,B1,ot,idx   
+
+    def get_sparsity(self,x,t):
+        x_= self.PoU(x)
+        t_ = self.PoU(t)
+        return x_,t_
     
-        
-# # KNN spatial implementation for a higher number 
-# class Random_Basis_Function(object):
-#     # input for the layer is set for [-1,1]
-#     def  __init__(self,num_per_point_feature,num_time_feature,num_spatial_basis,num_spatial_basis_pos,band_width,dim=2):
-#         self.basis_point = torch.randn((num_spatial_basis_pos,dim))
-#         self.band_width = band_width
-#         self.spatial_A = torch.randn((num_time_feature,num_spatial_basis,num_per_point_feature,dim))
-#         self.time_A = torch.randn((num_time_feature,num_spatial_basis,num_per_point_feature))
-#         self.bias = torch.randn((num_time_feature,num_spatial_basis,num_per_point_feature))
-#         self.PoU = PoU_simple
-#         self.x_process = x_process
-#         self.t_process = t_process
-#         self.non_linear = nn.Sigmoid()
+    def inference(self,x_,t_):
+        # x_: Q * dim
+        x_,t_,idx = self.neighbor_search(x_,t_)
+        # x_: Q*idx*dim 
+        # We need to implement a KNN version for the martix recon
+        # Here we just use a meshed version (Maybe Hashing??)
+        total_ = self.num_time_feature*self.num_spatial_basis
+        A_process = self.spatial_A.reshape(total_,-1)
+        A_process = torch.gather(A_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature,self.dim)
+        t_process_ = self.time_A.reshape(total_,-1)
+        t_process_ = torch.gather(t_process_,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        bias_process = self.bias.reshape(total_,-1)
+        bias_process = torch.gather(bias_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        u_process = self.u_.reshape(total_,-1)
+        u_process = torch.gather(u_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
+        time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
+        ot = self.non_linear(sptail_val+time_val+self.bias)
+        #A,t,b: qhej; u:qhej
+        x_weight,t_weight = self.get_sparsity(x_,t_)
+        #x_weight, t_weight: qh,qh
+        ot = x_weight*t_weight*u_process*ot
+        ot = torch.sum(torch.sum(ot,dim=-1),dim=1)
+        # ot:qe
+        return ot   
 
-
-#     # we only search for the spatial discretization but time is divided equally.
-#     def neighbor_search(self,x_):
-#         _,idx = knn_points(x_,self.basis_point,K=4)
-#         p_reduce = knn_gather(self.basis_point,idx)
-#         x_ = x_process(x_,p_reduce,self.bandwidth)
-#         return x_,idx
-
-#     # implement kd tree for neighbor search 
-
-#     # 
