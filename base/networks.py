@@ -250,6 +250,7 @@ class Random_Basis_Function_L(object):
         self.time_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature))
         self.bias = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature))
         self.u_ = torch.nn.Parameter(torch.randn(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature))
+        self.idx_box = torch.linspace(0,self.num_time_feature*self.num_spatial_basis*self.variable_num*self.num_per_point_feature-1,1).reshape(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature)
         self.PoU = PoU_simple
         self.non_linear = nn.Sigmoid()
         self.tb = None
@@ -271,6 +272,7 @@ class Random_Basis_Function_L(object):
         t =  torch.linspace(0,end_time,time_num).unsqueeze(1).repeat(1,length).reshape(-1,1)
         coords = coords.unsqeeze(0).repeat(time_num,1,1)
         coords = coords.reshape(-1,dim)
+        
         return coords,t
 
     def _create_tb(self, name, overwrite=True):
@@ -302,7 +304,7 @@ class Random_Basis_Function_L(object):
         t_ = self.t_process(t_,t_0,self.time_band_width)
         return x_,t_,idx
 
-    def forward(self,x_,t_,boundary=None,norm=None):
+    def forward(self,x_,t_):
         x_,t_,idx = self.neighbor_search(x_,t_)
         total_ = self.num_time_feature*self.num_spatial_basis
         A_process = self.spatial_A.reshape(total_,-1)
@@ -324,12 +326,12 @@ class Random_Basis_Function_L(object):
         L1 = diff_ops.gradient(ot, x_)
         L2 = diff_ops.hessian(ot.unsqueeze(-1), x_.unsqueeze(1).repeat(1,ot.shape[1],1))
         Lt = diff_ops.gradient(ot, t_)
-        B1 = None
-        if norm is not None:
-            B1 = L1[boundary] * norm.unsqeeze(1)
-        return L1,L2,Lt,B1,ot
+        # B1 = None
+        # if norm is not None:
+        #     B1 = L1[boundary] * norm.unsqeeze(1)
+        return L1,L2,Lt,ot
     
-    def matrix_ids(self,x_,t_,boundary=None,norm=None):
+    def matrix_ids(self,x_,t_):
         x_,t_,idx = self.neighbor_search(x_,t_)
         total_ = self.num_time_feature*self.num_spatial_basis
         A_process = self.spatial_A.reshape(total_,-1)
@@ -350,10 +352,10 @@ class Random_Basis_Function_L(object):
         L1 = diff_ops.gradient(ot, x_)
         L2 = diff_ops.hessian(ot.unsqueeze(-1), x_.unsqueeze(1).repeat(1,ot.shape[1],1))
         Lt = diff_ops.gradient(ot, t_)
-        B1 = None
-        if norm is not None:
-            B1 = L1[boundary] * norm.unsqeeze(1)
-        return L1,L2,Lt,B1,ot,idx   
+        # B1 = None
+        # if norm is not None:
+        #     B1 = L1[boundary] * norm.unsqeeze(1)
+        return L1,L2,Lt,ot,idx   
 
     def get_sparsity(self,x,t):
         x_= self.PoU(x)

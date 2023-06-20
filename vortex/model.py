@@ -3,10 +3,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from base import BaseModel, sample_random, sample_uniform, sample_boundary2D_separate
-from base import Random_Basis_Function
+from base import Random_Basis_Function,Random_Basis_Function_L
 from cg_batch import cg_batch
 from .visualize import draw_vector_field2D, draw_scalar_field2D, draw_curl, draw_magnitude, save_numpy_img, save_figure
 from base import gradient, divergence, laplace, jacobian
+# from torchsparsegradutils import sparse_triangular_solve, sparse_generic_solve
+# from torchsparsegradutils.utils import linear_cg, minres, rand_sparse, rand_sparse_tri
 
 class Vortex(Random_Basis_Function):
     def  __init__(self,cfg):
@@ -157,6 +159,7 @@ class Vortex_L(Random_Basis_Function_L):
         self.colloation_pts_num = self.cfg.colloation_pts_num
         self._create_tb(cfg.output_path)
         self.total_samples,self.t,self.norm = self.process_input()
+        self.num_process()
         self.optim = torch.nn.optim.Adam([self.u_], lr = 0.0001)
 
     def process_boundary(self,N,epsilon=1e-4):
@@ -183,6 +186,7 @@ class Vortex_L(Random_Basis_Function_L):
             elif i==2:
                 self.p_boundary = len(coords)
         coords = torch.cat(coords, dim=0)
+        self.boundary_num = coords.shape[0]
         return coords, norm
 
     def process_time(self,time,end_time,spatial_pts):
@@ -205,6 +209,14 @@ class Vortex_L(Random_Basis_Function_L):
     def mse_loss(self,x,y):
         return torch.mean((x-y)**2)
 
+    def num_process(self):
+        points = torch.linspace(0,self.time_num*(self.colloation_pts_num+self.boundary_num),1).reshape(self.time_num,-1)
+        self.inner_pts = points[1:,:self.colloation_pts_num]
+        self.dir_bound = points[1:,self.colloation_pts_num+self.u_boundary:self.colloation_pts_num+self.u_boundary+self.p_boundary].reshape(-1)
+        self.neu_bound = points[1:,self.colloation_pts_num:self.colloation_pts_num+self.u_boundary].reshape(-1)
+        self.u_left = points[:,self.colloation_pts_num+self.boundary_num-self.u_boundary_left:].reshape(-1)
+        self.init_pts = points[0,:self.colloation_pts_num+self.boundary_num-self.u_boundary_left].reshape(-1)
+
     def train(self):
         self.optim.zero_grad()
         loss = self.train_step(self.total_samples,self.t,self.norm)
@@ -214,22 +226,23 @@ class Vortex_L(Random_Basis_Function_L):
     # Actually, we need to use PCG.
     def train_step(self,x,t,norm):
         loss = 0
-        boundary = torch.linspace(self.colloation_pts_num,self.colloation_pts_num+self.u_boundary-1,1).long()
-        L1,L2,Lt,B1,ot = self.forward(x,t,boundary,norm)
+        L1,L2,Lt,ot = self.forward(x,t)
         # L1:qed,Lt:qe,B1:qe,ot:qe 
-        LHS_1 = self.rho * torch.einsum('qed,qd->qe', L1[...,:self.variable_list[0],:], ot[...,:self.variable_list[0]]) + self.rho * Lt[...,:self.variable_list[0],:] + L1[...,self.variable_list[0]:self.variable_list[1],:]
+        LHS_1 = self.rho * torch.einsum('qed,qd->qe', L1[self.inner_pts,...,:self.variable_list[0],:], ot[self.inner_pts,...,:self.variable_list[0]]) + self.rho * Lt[self.inner_pts,...,:self.variable_list[0],:] + L1[self.inner_pts,...,self.variable_list[0]:self.variable_list[1],:]
         RHS_1 = torch.ones_like(ot) * self.cfg.gravity * self.rho
-        LHS_2 = torch.einsum('qdd->qd',L1[...,:self.variable_list[0],:])
+        LHS_2 = torch.einsum('qdd->qd',L1[self.inner_pts,...,:self.variable_list[0],:])
         RHS_2 = torch.zeros_like(LHS_2)
-        LHS_3 = B1
+        #(Some problem!!!)
+        LHS_3 = torch.einsum('qe,qe->q',ot[self.neu_bound,:self.variable_list[0]], norm)
         RHS_3 = torch.zeros_like(LHS_3)
-        LHS_4 = ot[-self.boundary_num+self.p_boundary:,self.variable_list[0]:self.variable_list[1]]
+
+        LHS_4 = ot[self.dir_bound,self.variable_list[0]:self.variable_list[1]]
         RHS_4 = torch.zeros_like(LHS_4)
-        LHS_5 = ot[-self.boundary_num+self.u_boundary:-self.boundary_num+self.p_boundary,:self.variable_list[0]]
+        LHS_5 = ot[self.u_boundary_left,:self.variable_list[0]]
         RHS_5 = torch.ones_like(LHS_5)
         RHS_5[...,1] = 0
         RHS_5[...,0] = self.internal_v
-        LHS_6 = ot[self.init_pts] 
+        LHS_6 = ot[self.init_pts]
         RHS_6 = torch.zeros_like(LHS_6)
         LHS = [LHS_1,LHS_2,LHS_3,LHS_4,LHS_5,LHS_6]
         RHS = [RHS_1,RHS_2,RHS_3,RHS_4,RHS_5,RHS_6]
@@ -237,56 +250,114 @@ class Vortex_L(Random_Basis_Function_L):
             loss += self.mse_loss(i,j) 
         return loss
 
+    def expand_idx(self,idx,e0,e1):
+        # idx:qh
+        j = self.num_per_point_feature
+        idx_list = []
+        for i in range(e0,e1):
+            K = self.idx_box.reshape(-1,self.variable_num,j)[:,i,:].expand(idx.shape[0],-1,-1)
+            idx = self.idx.expand(-1,-1,j)
+            idx = torch.gather(K,1,idx).reshape(idx.shape[0],-1)
+            idx_list.append(idx)
+        idx = torch.cat(idx_list,dim=0)
+        return idx
+
+    def expand_idx_norm(self,idx,e0,e1):
+        # idx:qh
+        j = self.num_per_point_feature
+        K = self.idx_box.reshape(-1,self.variable_num,j)[:,e0:e1,:].expand(idx.shape[0],-1,-1,-1)
+        idx = self.idx.expand(-1,-1,e1-e0,j)
+        idx = torch.gather(K,1,idx).reshape(idx.shape[0],-1)
+        return idx
+
+    
+
     def sparse_matrix_recon(self,x,t,norm):
         #TODO: NEED TO FIX THE 1,2's q position
         #TODO: the problem for idx need to refixed for number
-        boundary = torch.linspace(self.colloation_pts_num,self.colloation_pts_num+self.u_boundary-1,1).long()
-        L1,L2,Lt,B1,ot,idx = self.matrix_ids(x,t,boundary,norm)
+        L1,L2,Lt,ot,idx = self.matrix_ids(x,t)
+        j = self.num_per_point_feature
         ## Sparse Matrix Shape: (tnej) * (qq) * (tnej)
         # Row shape: (tnej) (q * q)
         # L1:qhejd,Lt:qhej,B1:qhej,ot:qhej u: tnej
         # idx qh
         # LHS1: qhej
-        LHS_1 = self.rho * torch.einsum('qhejd,qhej->qhej', L1[...,:self.variable_list[0],:], ot[...,:self.variable_list[0]]) + self.rho * Lt[...,:self.variable_list[0],:] + L1[...,self.variable_list[0]:self.variable_list[1],:]
-        RHS_1 = torch.ones_like(ot[:,0,:,:]) * self.cfg.gravity * self.rho
-        idx1 = idx
+        LHS_1 = self.rho * torch.einsum('qhejd,qhej->qhej', L1[self.inner_pts,...,:self.variable_list[0],:], ot[self.inner_pts,...,:self.variable_list[0]]) + self.rho * Lt[self.inner_pts,...,:self.variable_list[0],:] + L1[self.inner_pts,...,self.variable_list[0]:self.variable_list[1],:]
+        # RHS1: qej
+        RHS_1 = torch.ones_like(ot[self.inner_pts,0,:,0]) * self.cfg.gravity * self.rho
+        # LHS: (qe)hj
+        LHS_1 = LHS_1.permute(0,2,1,3).reshape(self.inner_pts.shape[0]*self.variable_list[0],-1)
+        RHS_1 = RHS_1.reshape(self.inner_pts.shape[0]*self.variable_list[0])
+        idx1 = self.expand_idx(idx[self.inner_pts],0,self.variable_list[0]) #(qe)hj
+        dimk = torch.linspace(0,LHS_1.shape[0]-1,1).unsqueeze(-1).repeat(LHS_1.shape[1])
+        idx1 = torch.stack([idx1,dimk],dim=2).reshape(-1,2)
 
         # LHS2: qhej
-        LHS_2 = torch.einsum('qhdjd->qhej',L1[...,:self.variable_list[0],:])
-        RHS_2 = torch.zeros_like(LHS_2[:,0,:,:])
-        idx2 = idx
-
-        # LHS3: q'hej
-        LHS_3 = B1
-        RHS_3 = torch.zeros_like(LHS_3[:,0,:,:])
-        idx3 = idx[boundary]
+        LHS_2 = torch.einsum('qhdjd->qhej',L1[self.inner_pts,...,:self.variable_list[0],:])
+        RHS_2 = torch.zeros_like(LHS_2[self.inner_pts,0,:,0])
+        LHS_2 = LHS_2.permute(0,2,1,3).reshape(self.inner_pts.shape[0]*self.variable_list[0],-1)
+        RHS_2 = RHS_2.reshape(self.inner_pts.shape[0]*self.variable_list[0])
+        idx2 = self.expand_idx(idx[self.inner_pts],0,self.variable_list[0]) #(qe)hj
+        dimk = torch.linspace(LHS_1.shape[0],LHS_2.shape[0]-1,1).unsqueeze(-1).repeat(LHS_2.shape[1])
+        idx2 = torch.stack([idx2,dimk],dim=2).reshape(-1,2)
+        
+        # LHS3: q'hej (Some problem!!!)
+        LHS_3 = torch.einsum('qhdj,qd->qhdj',ot[self.neu_bound,:self.variable_list[0]], norm)
+        RHS_3 = torch.zeros_like(LHS_3[self.neu_bound,0,:,0])
+        LHS_3 = LHS_3.permute(0,2,1,3).reshape(self.neu_bound.shape[0],-1)
+        RHS_3 = RHS_3.reshape(self.neu_bound.shape[0])
+        idx3 = self.expand_idx_norm(idx[self.neu_bound],0,self.variable_list[0]) #(q)ehj
+        dimk = torch.linspace(LHS_2.shape[0],LHS_3.shape[0]-1,1).unsqueeze(-1).repeat(LHS_3.shape[1])
+        idx3 = torch.stack([idx3,dimk],dim=2).reshape(-1,2)
 
         # LHS4: q'hej
-        LHS_4 = ot[-self.boundary_num+self.p_boundary:,...,self.variable_list[0]:self.variable_list[1],:]
-        RHS_4 = torch.zeros_like(LHS_4[:,0,:,:])
-        idx4 = idx[-self.boundary_num+self.p_boundary:]
+        LHS_4 = ot[self.dir_bound,...,self.variable_list[0]:self.variable_list[1],:]
+        RHS_4 = torch.zeros_like(LHS_4[self.dir_bound,0,:,0])
+        LHS_4 = LHS_4.permute(0,2,1,3).reshape(self.dir_bound.shape[0]*(self.variable_list[1]-self.variable_list[0]),-1)
+        RHS_4 = RHS_4.reshape(self.dir_bound.shape[0]*(self.variable_list[1]-self.variable_list[0]))
+        idx4 = self.expand_idx(idx[self.dir_bound],self.variable_list[0],self.variable_list[1]) #(qe)hj
+        dimk = torch.linspace(LHS_3.shape[0],LHS_4.shape[0]-1,1).unsqueeze(-1).repeat(LHS_4.shape[1])
+        idx4 = torch.stack([idx4,dimk],dim=2).reshape(-1,2)
 
         # LHS5: q'hej
-        LHS_5 = ot[-self.boundary_num+self.u_boundary,...,:self.variable_list[0],:]
-        RHS_5 = torch.ones_like(LHS_5[:,0,:,:])
+        LHS_5 = ot[self.u_boundary_left,...,:self.variable_list[0],:]
+        RHS_5 = torch.ones_like(LHS_5[self.u_boundary_left,0,:,0])
         RHS_5[...,1] = 0
         RHS_5[...,0] = self.internal_v
-        idx5 = idx[-self.boundary_num+self.u_boundary]
+        LHS_5 = LHS_5.permute(0,2,1,3).reshape(self.u_boundary_left.shape[0]*self.variable_list[0],-1)
+        RHS_5 = RHS_5.reshape(self.u_boundary_left.shape[0]*self.variable_list[0])
+        idx5 = self.expand_idx(idx[self.u_boundary_left],0,self.variable_list[0]) #(qe)hj
+        dimk = torch.linspace(LHS_4.shape[0],LHS_5.shape[0]-1,1).unsqueeze(-1).repeat(LHS_5.shape[1])
+        idx5 = torch.stack([idx5,dimk],dim=2).reshape(-1,2)
 
         # LHS6: q'hej
         LHS_6 = ot[self.init_pts]
-        RHS_6 = torch.zeros_like(LHS_6[:,0,:,:])
-        idx6 = idx[self.init_pts]
+        RHS_6 = torch.zeros_like(LHS_6[self.init_pts,0,:,0])
+        LHS_5 = LHS_5.permute(0,2,1,3).reshape(self.init_pts.shape[0]*self.variable_list[1],-1)
+        RHS_5 = RHS_5.reshape(self.init_pts.shape[0]*self.variable_list[1])
+        idx6 = self.expand_idx(idx[self.init_pts],0,self.variable_list[1]) #(qe)hj
+        dimk = torch.linspace(LHS_5.shape[0],LHS_6.shape[0]-1,1).unsqueeze(-1).repeat(LHS_6.shape[1])
+        idx6 = torch.stack([idx6,dimk],dim=2).reshape(-1,2)
 
         LHS = [LHS_1,LHS_2,LHS_3,LHS_4,LHS_5,LHS_6]
         RHS = [RHS_1,RHS_2,RHS_3,RHS_4,RHS_5,RHS_6]
         idx = [idx1,idx2,idx3,idx4,idx5,idx6]
+
+
         #LHS: q?h?ej
         q = sum([i.shape[0]*LHS.shape[2] for i in LHS])
-        h = LHS[0].shape[1]
-        A = torch.sparse_coo_tensor()
-        pass
+        h = self.num_time_feature*self.num_spatial_basis*self.variable_num*self.num_per_point_feature
+        LHS = torch.cat([i.reshape(-1) for i in LHS],dim=0)
+        A = torch.sparse_coo_tensor(indices=idx,values=LHS,size=(q,h))
+        b = torch.cat(RHS,dim=0)
+        return A,b
 
+    def sparse_solver(self,A,b):
+        A = A.transpose()@A
+        b = A.transpose()@A
+        out = torch.randint(1, (b.shape[0],), dtype=torch.float64)
+        torch.linalg.solve(A, b, out)
+        return out
 
     def sample_field(self, resolution, boundary_num, return_samples=False):
         """sample current field with uniform grid points"""
