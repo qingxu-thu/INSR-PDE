@@ -10,6 +10,10 @@ from base import gradient, divergence, laplace, jacobian
 # from torchsparsegradutils import sparse_triangular_solve, sparse_generic_solve
 # from torchsparsegradutils.utils import linear_cg, minres, rand_sparse, rand_sparse_tri
 
+
+
+
+
 class Vortex(Random_Basis_Function):
     def  __init__(self,cfg):
         super(Vortex,self).__init__(cfg)
@@ -146,6 +150,30 @@ class Vortex(Random_Basis_Function):
     #     np.save(save_path, grid_u)
 
 
+class batch_input(torch.utils.data.Dataset):
+    def __init__(self,pts,t,inner_pts,dir_bound,neu_bound,u_left,init_pts,norm):
+        print(pts.shape,t.shape)
+        self.pts = pts
+        self.t = t
+        bz = self.pts.shape[0]
+        #print(bz,norm.shape)
+        self.flag = torch.zeros((bz,5)).bool().to(self.pts.device)
+        self.flag[inner_pts,0] = 1
+        self.flag[dir_bound,1] = 1
+        self.flag[neu_bound,2] = 1
+        self.flag[u_left,3] = 1
+        self.flag[init_pts,4] = 1
+        
+        self.norm = torch.zeros((bz,norm.shape[1])).to(self.pts.device)
+        self.norm[self.flag[:,2],:] = norm
+        
+    def __len__(self):
+        return self.pts.shape[0]
+
+    def __getitem__(self,index):
+        
+        return self.pts[index],self.t[index],self.flag[index,0],self.flag[index,1],self.flag[index,2],self.flag[index,3],self.flag[index,4],self.norm[index]
+
 class Vortex_L(Random_Basis_Function_L):
     def  __init__(self,cfg):
         super(Vortex_L,self).__init__(cfg)
@@ -225,16 +253,25 @@ class Vortex_L(Random_Basis_Function_L):
         self.init_pts = points[0,:self.colloation_pts_num+self.boundary_num-self.u_boundary_left].reshape(-1).long()
 
     def train(self):
-        self.optim.zero_grad()
-        loss = self.train_step(self.total_samples,self.t,self.norm)
-        print("loss",loss)
-        loss.backward()
-        self.optim.step()
+        
+        dataset = batch_input(self.total_samples,self.t,self.inner_pts,self.dir_bound,self.neu_bound,self.u_left,self.init_pts,self.norm)
+        dataloader = torch.utils.data.DataLoader(dataset,batch_size = 1024,shuffle=True)
+        for i,data in enumerate(dataloader):
+            self.optim.zero_grad()
+            x,t,inner_pts,neu_bound,dir_bound,u_boundary_left,init_pts, norm = data
+
+            #print(torch.sum(inner_pts)+0.0)
+            loss = self.train_step_batch(x,t,norm,inner_pts,neu_bound,dir_bound,u_boundary_left,init_pts)
+            print("loss",loss)
+            loss.backward()
+            self.optim.step()
 
     # Actually, we need to use PCG.
     def train_step(self,x,t,norm):
         loss = 0
+
         L1,L2,Lt,ot = self.forward(x,t)
+        
         # L1:qed,Lt:qe,B1:qe,ot:qe 
         LHS_1 = self.rho * torch.einsum('qed,qd->qe', L1[self.inner_pts,:self.variable_list[0],:], \
                                         ot[self.inner_pts,:self.variable_list[0]]) \
@@ -262,6 +299,44 @@ class Vortex_L(Random_Basis_Function_L):
         for i,j in zip(LHS,RHS):
             loss += self.mse_loss(i,j) 
         return loss
+    
+    def train_step_batch(self,x,t,norm,inner_pts,neu_bound,dir_bound,u_boundary_left,init_pts):
+        loss = 0
+        L1,L2,Lt,ot = self.forward(x,t)
+        # L1:qed,Lt:qe,B1:qe,ot:qe 
+        LHS_1 = self.rho * torch.einsum('qed,qd->qe', L1[inner_pts,:self.variable_list[0],:], \
+                                        ot[inner_pts,:self.variable_list[0]]) \
+                                         + self.rho * Lt[inner_pts,:self.variable_list[0]].reshape_as(ot[inner_pts,:self.variable_list[0]]) \
+                                        + L1[inner_pts,self.variable_list[0]:self.variable_list[1],:].reshape_as(ot[inner_pts,:self.variable_list[0]])
+        RHS_1 = torch.ones_like(LHS_1) * self.cfg.gravity * self.rho
+        
+        LHS_2 = torch.einsum('qdd->qd',L1[inner_pts,...,:self.variable_list[0],:])
+        RHS_2 = torch.zeros_like(LHS_2)
+        #(Some problem!!!)
+        #print(ot[neu_bound,:self.variable_list[0]].shape,norm.shape)
+        # if ot[neu_bound,:self.variable_list[0]].shape[0]==0:
+        #     LHS_3 = torch.Tensor([0.0])
+        # else:
+        LHS_3 = torch.einsum('qe,qe->q',ot[neu_bound,:self.variable_list[0]], norm[neu_bound])
+        RHS_3 = torch.zeros_like(LHS_3)
+
+        LHS_4 = ot[dir_bound,self.variable_list[0]:self.variable_list[1]]
+        RHS_4 = torch.zeros_like(LHS_4)
+        LHS_5 = ot[u_boundary_left,:self.variable_list[0]]
+        RHS_5 = torch.ones_like(LHS_5)
+        RHS_5[...,1] = 0
+        RHS_5[...,0] = self.internal_v
+        LHS_6 = ot[init_pts]
+        RHS_6 = torch.zeros_like(LHS_6)
+        LHS = [LHS_1,LHS_2,LHS_3,LHS_4,LHS_5,LHS_6]
+        RHS = [RHS_1,RHS_2,RHS_3,RHS_4,RHS_5,RHS_6]
+        k = 0
+        for i,j in zip(LHS,RHS):
+            #print(LHS_1,RHS_1)
+            loss += self.mse_loss(i,j) 
+        return loss
+
+
 
     def expand_idx(self,idx,e0,e1):
         # idx:qh
