@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from base import BaseModel, sample_random, sample_uniform, sample_boundary2D_separate
 from base import Random_Basis_Function,Random_Basis_Function_L
-from cg_batch import cg_batch
+from .cg_batch import cg_batch
 from .visualize import draw_vector_field2D, draw_scalar_field2D, draw_curl, draw_magnitude, save_numpy_img, save_figure
 from base import gradient, divergence, laplace, jacobian
 # from torchsparsegradutils import sparse_triangular_solve, sparse_generic_solve
@@ -23,9 +23,9 @@ class Vortex(Random_Basis_Function):
     def process_boundary(self,N,epsilon=1e-4):
         boundary_ranges = [[[-1, 1], [-1 - epsilon, -1 + epsilon]],
                            [[-1, 1], [1 - epsilon, 1 + epsilon]],
-                           [[1 - epsilon, 1 + epsilon], [-1, 1]]
+                           [[1 - epsilon, 1 + epsilon], [-1, 1]],
                            [[-1 - epsilon, -1 + epsilon], [-1, 1]],
-                           ,]
+                           ]
         coords = []
         for i,bound in enumerate(boundary_ranges):
             x_b, y_b = bound
@@ -160,66 +160,74 @@ class Vortex_L(Random_Basis_Function_L):
         self._create_tb(cfg.output_path)
         self.total_samples,self.t,self.norm = self.process_input()
         self.num_process()
-        self.optim = torch.nn.optim.Adam([self.u_], lr = 0.0001)
+        self.optim = torch.optim.Adam([self.u_], lr = 0.1)
 
     def process_boundary(self,N,epsilon=1e-4):
         boundary_ranges = [[[-1, 1], [-1 - epsilon, -1 + epsilon]],
                            [[-1, 1], [1 - epsilon, 1 + epsilon]],
-                           [[1 - epsilon, 1 + epsilon], [-1, 1]]
+                           [[1 - epsilon, 1 + epsilon], [-1, 1]],
                            [[-1 - epsilon, -1 + epsilon], [-1, 1]],
-                           ,]
+                           ]
         coords = []
+        Kp = 0
         for i,bound in enumerate(boundary_ranges):
             x_b, y_b = bound
-            points = torch.empty(N // 4, 2)
+            points = torch.empty(N // 4, 2).to(self.device)
             points[:, 0] = torch.rand(N // 4) * (x_b[1] - x_b[0]) + x_b[0]
             points[:, 1] = torch.rand(N // 4) * (y_b[1] - y_b[0]) + y_b[0]
             coords.append(points)
+            Kp += points.shape[0]
             if i==0:
                 norm = torch.zeros(N // 4, 2)
                 norm[:,1] += 1
             elif i==1:
-                self.u_boundary = len(coords)
+                self.u_boundary = Kp
                 norm = torch.cat([norm,-norm],dim=0)
             elif i==3:
-                self.u_boundary_left = len(coords)
+                self.u_boundary_left = Kp
             elif i==2:
-                self.p_boundary = len(coords)
+                self.p_boundary = Kp
         coords = torch.cat(coords, dim=0)
         self.boundary_num = coords.shape[0]
         return coords, norm
 
-    def process_time(self,time,end_time,spatial_pts):
-        length, dim = spatial_pts.shape[-1]
-        t =  torch.linspace(0,end_time,time).unsqueeze(1).repeat(1,length).reshape(-1,1)
-        spatial_pts = spatial_pts.unsqeeze(0).repeat(time,1,1)
+    def process_time(self,time,end_time,spatial_pts,norm):
+        length, dim = spatial_pts.shape
+        t =  torch.linspace(0,end_time,time,device=self.device).unsqueeze(1).repeat(1,length).reshape(-1,1).requires_grad_(True)
+        spatial_pts = spatial_pts.unsqueeze(0).repeat(time,1,1)
+        norm = norm.unsqueeze(0).repeat(time,1,1)[1:,:,:].reshape(-1,dim).to(self.device)
         spatial_pts = spatial_pts.reshape(-1,dim)
         self.init_pts = length-(self.u_boundary_left-self.p_boundary)
 
-        return spatial_pts,t
+        return spatial_pts,t,norm
 
     def process_input(self):
         ####----collocation-pts----u_boundary---u_boundary_left---p_boundary----
         grid_samples = sample_random(self.colloation_pts_num, 2, device=self.device).requires_grad_(True)
         boundary_samples,norm = self.process_boundary(self.boundary_num)
         total_samples = torch.cat([grid_samples,boundary_samples],dim=0)
-        total_samples,t = self.process_time(self.time_num,self.time_length,total_samples)
+        total_samples,t,norm = self.process_time(self.time_num,self.time_length,total_samples,norm)
         return total_samples,t,norm
 
     def mse_loss(self,x,y):
-        return torch.mean((x-y)**2)
+        max_x = torch.abs(x).max()
+        if max_x.item()==0:
+            return torch.mean((x-y)**2)*0.0
+        else:
+            return torch.mean((x-y)**2)/max_x
 
     def num_process(self):
-        points = torch.linspace(0,self.time_num*(self.colloation_pts_num+self.boundary_num),1).reshape(self.time_num,-1)
-        self.inner_pts = points[1:,:self.colloation_pts_num]
-        self.dir_bound = points[1:,self.colloation_pts_num+self.u_boundary:self.colloation_pts_num+self.u_boundary+self.p_boundary].reshape(-1)
-        self.neu_bound = points[1:,self.colloation_pts_num:self.colloation_pts_num+self.u_boundary].reshape(-1)
-        self.u_left = points[:,self.colloation_pts_num+self.boundary_num-self.u_boundary_left:].reshape(-1)
-        self.init_pts = points[0,:self.colloation_pts_num+self.boundary_num-self.u_boundary_left].reshape(-1)
+        points = torch.linspace(0,self.time_num*(self.colloation_pts_num+self.boundary_num)-1,self.time_num*(self.colloation_pts_num+self.boundary_num),device=self.device).reshape(self.time_num,-1)
+        self.inner_pts = points[1:,:self.colloation_pts_num].reshape(-1).long()
+        self.dir_bound = points[1:,self.colloation_pts_num+self.u_boundary:self.colloation_pts_num+self.u_boundary+self.p_boundary].reshape(-1).long()
+        self.neu_bound = points[1:,self.colloation_pts_num:self.colloation_pts_num+self.u_boundary].reshape(-1).long()
+        self.u_left = points[:,self.colloation_pts_num+self.boundary_num-self.u_boundary_left:].reshape(-1).long()
+        self.init_pts = points[0,:self.colloation_pts_num+self.boundary_num-self.u_boundary_left].reshape(-1).long()
 
     def train(self):
         self.optim.zero_grad()
         loss = self.train_step(self.total_samples,self.t,self.norm)
+        print("loss",loss)
         loss.backward()
         self.optim.step()
 
@@ -228,8 +236,12 @@ class Vortex_L(Random_Basis_Function_L):
         loss = 0
         L1,L2,Lt,ot = self.forward(x,t)
         # L1:qed,Lt:qe,B1:qe,ot:qe 
-        LHS_1 = self.rho * torch.einsum('qed,qd->qe', L1[self.inner_pts,...,:self.variable_list[0],:], ot[self.inner_pts,...,:self.variable_list[0]]) + self.rho * Lt[self.inner_pts,...,:self.variable_list[0],:] + L1[self.inner_pts,...,self.variable_list[0]:self.variable_list[1],:]
-        RHS_1 = torch.ones_like(ot) * self.cfg.gravity * self.rho
+        LHS_1 = self.rho * torch.einsum('qed,qd->qe', L1[self.inner_pts,:self.variable_list[0],:], \
+                                        ot[self.inner_pts,:self.variable_list[0]]) \
+                                         + self.rho * Lt[self.inner_pts,:self.variable_list[0]].reshape_as(ot[self.inner_pts,:self.variable_list[0]]) \
+                                        + L1[self.inner_pts,self.variable_list[0]:self.variable_list[1],:].reshape_as(ot[self.inner_pts,:self.variable_list[0]])
+        RHS_1 = torch.ones_like(LHS_1) * self.cfg.gravity * self.rho
+        
         LHS_2 = torch.einsum('qdd->qd',L1[self.inner_pts,...,:self.variable_list[0],:])
         RHS_2 = torch.zeros_like(LHS_2)
         #(Some problem!!!)
@@ -246,6 +258,7 @@ class Vortex_L(Random_Basis_Function_L):
         RHS_6 = torch.zeros_like(LHS_6)
         LHS = [LHS_1,LHS_2,LHS_3,LHS_4,LHS_5,LHS_6]
         RHS = [RHS_1,RHS_2,RHS_3,RHS_4,RHS_5,RHS_6]
+        k = 0
         for i,j in zip(LHS,RHS):
             loss += self.mse_loss(i,j) 
         return loss
