@@ -7,6 +7,7 @@ from base import Random_Basis_Function,Random_Basis_Function_L
 from .cg_batch import cg_batch
 from .visualize import draw_vector_field2D, draw_scalar_field2D, draw_curl, draw_magnitude, save_numpy_img, save_figure
 from base import gradient, divergence, laplace, jacobian
+from tqdm import tqdm
 # from torchsparsegradutils import sparse_triangular_solve, sparse_generic_solve
 # from torchsparsegradutils.utils import linear_cg, minres, rand_sparse, rand_sparse_tri
 
@@ -152,7 +153,7 @@ class Vortex(Random_Basis_Function):
 
 class batch_input(torch.utils.data.Dataset):
     def __init__(self,pts,t,inner_pts,dir_bound,neu_bound,u_left,init_pts,norm):
-        print(pts.shape,t.shape)
+        #print(pts.shape,t.shape)
         self.pts = pts
         self.t = t
         bz = self.pts.shape[0]
@@ -188,7 +189,7 @@ class Vortex_L(Random_Basis_Function_L):
         self._create_tb(cfg.output_path)
         self.total_samples,self.t,self.norm = self.process_input()
         self.num_process()
-        self.optim = torch.optim.Adam([self.u_], lr = 0.1)
+        self.optim = torch.optim.Adam([self.u_], lr = 0.01)
 
     def process_boundary(self,N,epsilon=1e-4):
         boundary_ranges = [[[-1, 1], [-1 - epsilon, -1 + epsilon]],
@@ -256,20 +257,21 @@ class Vortex_L(Random_Basis_Function_L):
         
         dataset = batch_input(self.total_samples,self.t,self.inner_pts,self.dir_bound,self.neu_bound,self.u_left,self.init_pts,self.norm)
         dataloader = torch.utils.data.DataLoader(dataset,batch_size = 1024,shuffle=True)
-        for i,data in enumerate(dataloader):
+        loss_total = 0
+        for i,data in enumerate(tqdm(dataloader)):
             self.optim.zero_grad()
             x,t,inner_pts,neu_bound,dir_bound,u_boundary_left,init_pts, norm = data
-
             #print(torch.sum(inner_pts)+0.0)
             loss = self.train_step_batch(x,t,norm,inner_pts,neu_bound,dir_bound,u_boundary_left,init_pts)
-            print("loss",loss)
             loss.backward()
+            loss_total += loss.detach().item()
             self.optim.step()
+        print("loss",loss_total)
+
 
     # Actually, we need to use PCG.
     def train_step(self,x,t,norm):
         loss = 0
-
         L1,L2,Lt,ot = self.forward(x,t)
         
         # L1:qed,Lt:qe,B1:qe,ot:qe 

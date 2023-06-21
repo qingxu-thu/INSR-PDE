@@ -120,7 +120,7 @@ def PoU(x):
 
 def PoU_simple(x):
     x_o = torch.zeros_like(x)
-    x_o = torch.where((x>=(-1)&(x<=1)),.1,x_o)
+    x_o = torch.where((x>=(-1)&(x<=1)),1,x_o)
     return x_o
 
 # this is a heavy implementation
@@ -271,8 +271,10 @@ class Random_Basis_Function_L(object):
         coords = coords.reshape(resolution**dim, dim)
         length, dim = coords.shape
         t =  torch.linspace(0,end_time,time_num, device=self.device).unsqueeze(1).repeat(1,length).reshape(-1,1)
+        #print(coords)
         coords = coords.unsqueeze(0).repeat(time_num,1,1)
         coords = coords.reshape(-1,dim)
+        
         #print(coords.shape,t.shape)
         return coords,t
 
@@ -340,12 +342,15 @@ class Random_Basis_Function_L(object):
         sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
         time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
         ot = self.non_linear(sptail_val+time_val+bias_process)
+        
         #A,t,b: qhej; u:qhej
         x_weight,t_weight = self.get_sparsity(x_,t_)
         #x_weight, t_weight: qh,qh
         #print(x_weight.shape,t_weight.shape)
         ot = x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None]*u_process*ot
+        #print(x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None])
         ot = torch.sum(torch.sum(ot,dim=-1),dim=1)
+        #print(ot)
         L1,_ = jacobian(ot, x)
         # TODO: We need A HESSIAN!!!!!!!!!!!!!!
         L2 = None
