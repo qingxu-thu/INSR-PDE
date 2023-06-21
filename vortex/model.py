@@ -157,6 +157,7 @@ class Vortex_L(Random_Basis_Function_L):
         self.boundary_num = self.cfg.boundary_num
         self.device = cfg.device
         self.colloation_pts_num = self.cfg.colloation_pts_num
+        self.vis_resolution = self.cfg.vis_resolution
         self._create_tb(cfg.output_path)
         self.total_samples,self.t,self.norm = self.process_input()
         self.num_process()
@@ -295,7 +296,12 @@ class Vortex_L(Random_Basis_Function_L):
         # L1:qhejd,Lt:qhej,B1:qhej,ot:qhej u: tnej
         # idx qh
         # LHS1: qhej
-        LHS_1 = self.rho * torch.einsum('qhejd,qhej->qhej', L1[self.inner_pts,...,:self.variable_list[0],:], ot[self.inner_pts,...,:self.variable_list[0]]) + self.rho * Lt[self.inner_pts,...,:self.variable_list[0],:] + L1[self.inner_pts,...,self.variable_list[0]:self.variable_list[1],:]
+        print(L1[self.inner_pts,...,:self.variable_list[0],:].shape,ot[self.inner_pts,...,:self.variable_list[0]].shape)
+        print(Lt[self.inner_pts,...,:self.variable_list[0],:].shape,L1[self.inner_pts,...,self.variable_list[0]:self.variable_list[1],:].shape)
+        LHS_1 = self.rho * torch.einsum('qhejd,qhej->qhej', L1[self.inner_pts,...,:self.variable_list[0],:], \
+                                        ot[self.inner_pts,...,:self.variable_list[0]]) \
+                                        + self.rho * Lt[self.inner_pts,...,:self.variable_list[0],:] + \
+                                        L1[self.inner_pts,...,self.variable_list[0]:self.variable_list[1],:]
         # RHS1: qej
         RHS_1 = torch.ones_like(ot[self.inner_pts,0,:,0]) * self.cfg.gravity * self.rho
         # LHS: (qe)hj
@@ -372,24 +378,29 @@ class Vortex_L(Random_Basis_Function_L):
         torch.linalg.solve(A, b, out)
         return out
 
+    def matrix_solver(self):
+        A,b = self.sparse_matrix_recon(self.total_samples,self.t,self.norm)
+        out = self.sparse_solver(A,b)
+
     def sample_field(self, resolution, boundary_num, return_samples=False):
         """sample current field with uniform grid points"""
         grid_samples = sample_uniform(resolution, 2, device=self.device, flatten=True).requires_grad_(True)
         boundary_samples,norm = self.process_boundary(boundary_num)
         total_samples = torch.cat([grid_samples,boundary_samples],dim=0)
-        total_samples,t = self.process_time(self.time_num,self.time_length,total_samples)
-        out = self.inference(total_samples,t,self.u_k)
+        total_samples,t,norm = self.process_time(self.time_num,self.time_length,total_samples,norm)
+        out = self.inference(total_samples,t)
         if return_samples:
-            return out, grid_samples
+            return out, total_samples
         return out
 
     def _vis_velocity(self):
         """visualization on tb during training"""
-        velos, samples = self.sample_field(self.vis_resolution, return_samples=True)
+        velos, samples = self.sample_field(self.vis_resolution,self.vis_resolution//20, return_samples=True)
         velos = velos.detach().cpu().numpy()
         samples = samples.detach().cpu().numpy()
+        print(velos.shape,samples.shape)
         fig = draw_vector_field2D(velos[:,:self.variable_list[0]], samples)
-        self.tb.add_figure("velocity", fig, global_step=self.train_step)
+        self.tb.add_figure("velocity", fig)
 
 
     # def write_output(self, output_folder):

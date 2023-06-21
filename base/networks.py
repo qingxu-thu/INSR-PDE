@@ -377,14 +377,23 @@ class Random_Basis_Function_L(object):
         # u_process = torch.gather(u_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
         sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
         time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
-        ot = self.non_linear(sptail_val+time_val+self.bias)
+        ot = self.non_linear(sptail_val+time_val+bias_process)
         #A,t,b: qhej; u:qhej
         x_weight,t_weight = self.get_sparsity(x_,t_)
-        #x_weight, t_weight: qh,qh
-        ot = x_weight*t_weight*ot
+        #x_weight, t_weight: qh,qh'
+        # something should be wrong here
+        ot =  x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None]*ot
+        print(ot.shape)
+        q_,h_,e_,j_ = ot.shape
+        ot = ot.reshape(ot.shape[0],-1)
         L1,_ = jacobian(ot, x)
-        L2 = hessian(ot.unsqueeze(-1), x_.unsqueeze(1).repeat(1,ot.shape[1],1))
+        L1 = L1.reshape(q_,h_,e_,j_,-1)
+        #L2 = hessian(ot.unsqueeze(-1), x_.unsqueeze(1).repeat(1,ot.shape[1],1))
+        # Actually, we do not have Hessian
+        L2 = None
         Lt,_ = jacobian(ot, t)
+        Lt = Lt.reshape(q_,h_,e_,j_,-1)
+        ot = ot.reshape(q_,h_,e_,j_ )
         # B1 = None
         # if norm is not None:
         #     B1 = L1[boundary] * norm.unsqeeze(1)
@@ -395,28 +404,37 @@ class Random_Basis_Function_L(object):
         t_ = self.PoU(t)
         return x_,t_
     
-    def inference(self,x_,t_):
+    def inference(self,x,t):
         # x_: Q * dim
-        x_,t_,idx = self.neighbor_search(x_,t_)
-        # x_: Q*idx*dim 
-        # We need to implement a KNN version for the martix recon
-        # Here we just use a meshed version (Maybe Hashing??)
+        x_,t_,idx = self.neighbor_search(x,t)
+        h = idx.shape[1]
+        bz = idx.shape[0]
         total_ = self.num_time_feature*self.num_spatial_basis
+        # Size is a problem here, we might abondon time
         A_process = self.spatial_A.reshape(total_,-1)
-        A_process = torch.gather(A_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature,self.dim)
+        A_process = A_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,A_process.shape[-1]) 
+        A_process = torch.gather(A_process,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature,self.dim)
         t_process_ = self.time_A.reshape(total_,-1)
-        t_process_ = torch.gather(t_process_,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        t_process_ = t_process_.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,t_process_.shape[-1])
+        t_process_ = torch.gather(t_process_,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature)
         bias_process = self.bias.reshape(total_,-1)
-        bias_process = torch.gather(bias_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        bias_process = bias_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,bias_process.shape[-1])
+        bias_process = torch.gather(bias_process,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature)
         u_process = self.u_.reshape(total_,-1)
-        u_process = torch.gather(u_process,idx).reshape(-1,self.variable_num,self.num_per_point_feature)
+        u_process = u_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,u_process.shape[-1])
+        u_process = torch.gather(u_process,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature)
+
         sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
         time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
-        ot = self.non_linear(sptail_val+time_val+self.bias)
+        ot = self.non_linear(sptail_val+time_val+bias_process)
         #A,t,b: qhej; u:qhej
         x_weight,t_weight = self.get_sparsity(x_,t_)
         #x_weight, t_weight: qh,qh
-        ot = x_weight*t_weight*u_process*ot
+        ot = x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None]*u_process*ot
         ot = torch.sum(torch.sum(ot,dim=-1),dim=1)
         # ot:qe
         return ot   
