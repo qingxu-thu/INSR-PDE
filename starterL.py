@@ -25,6 +25,7 @@ cfg.log_dir = './log'
 cfg.n_timesteps = 100000
 cfg.neighbor_K  = 6
 cfg.vis_resolution = 100
+cfg.seed = 12312321
 model = Vortex_L(cfg)
 
 for t in range(cfg.n_timesteps + 1):

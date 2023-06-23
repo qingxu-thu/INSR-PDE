@@ -235,6 +235,7 @@ class Random_Basis_Function_L(object):
     # input for the layer is set for [-1,1]
     def  __init__(self,cfg):
         self.cfg = cfg
+        torch.manual_seed(cfg.seed)
         self.num_per_point_feature = cfg.num_per_point_feature
         self.num_time_feature = cfg.time_num
         self.time_length = self.cfg.time_length

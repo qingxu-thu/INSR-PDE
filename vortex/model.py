@@ -7,9 +7,10 @@ from base import Random_Basis_Function,Random_Basis_Function_L
 from .cg_batch import cg_batch
 from .visualize import draw_vector_field2D, draw_scalar_field2D, draw_curl, draw_magnitude, save_numpy_img, save_figure
 from base import gradient, divergence, laplace, jacobian
-import cupy
 # from torchsparsegradutils import sparse_triangular_solve, sparse_generic_solve
 # from torchsparsegradutils.utils import linear_cg, minres, rand_sparse, rand_sparse_tri
+from .sparse_solver import sparse_solve
+from scipy import sparse
 
 class Vortex(Random_Basis_Function):
     def  __init__(self,cfg):
@@ -316,7 +317,7 @@ class Vortex_L(Random_Basis_Function_L):
         dimk = torch.linspace(0,LHS_1.shape[0]-1,LHS_1.shape[0]).to(self.device).unsqueeze(-1).repeat(1,LHS_1.shape[1])
         idx1 = torch.stack([idx1,dimk],dim=2).reshape(-1,2)
 
-        num += LHS_1.shape[0]
+        num = 0
         # LHS2: qhej
         LHS_2 = torch.einsum('qhdjd->qhdj',L1[self.inner_pts,...,:self.variable_list[0],:,:])
         RHS_2 = torch.zeros_like(ot[self.inner_pts,0,:self.variable_list[0],0])
@@ -324,11 +325,11 @@ class Vortex_L(Random_Basis_Function_L):
         
         RHS_2 = RHS_2.reshape(self.inner_pts.shape[0]*self.variable_list[0])
         idx2 = self.expand_idx(idx[self.inner_pts],0,self.variable_list[0]) #(qe)hj
-        dimk = torch.linspace(LHS_1.shape[0],LHS_1.shape[0]+LHS_2.shape[0]-1,LHS_2.shape[0]).to(self.device).unsqueeze(1).repeat(1,LHS_2.shape[1])
+        dimk = torch.linspace(num,num+LHS_2.shape[0]-1,LHS_2.shape[0]).to(self.device).unsqueeze(1).repeat(1,LHS_2.shape[1])
         idx2 = torch.stack([idx2,dimk],dim=2).reshape(-1,2)
 
 
-        num += LHS_2.shape[0]
+        num = 0
         # LHS3: q'hej (Some problem!!!)
         LHS_3 = torch.einsum('qhdj,qd->qhdj',ot[self.neu_bound,:,:self.variable_list[0]], norm)
         RHS_3 = torch.zeros_like(ot[self.neu_bound,0,0,0])
@@ -340,7 +341,7 @@ class Vortex_L(Random_Basis_Function_L):
 
 
         # LHS4: q'hej
-        num += LHS_3.shape[0]
+        num = 0
         LHS_4 = ot[self.dir_bound,...,self.variable_list[0]:self.variable_list[1],:]
         RHS_4 = torch.zeros_like(ot[self.dir_bound,0,0,0])
         LHS_4 = LHS_4.permute(0,2,1,3).reshape(self.dir_bound.shape[0]*(self.variable_list[1]-self.variable_list[0]),-1)
@@ -349,7 +350,7 @@ class Vortex_L(Random_Basis_Function_L):
         dimk = torch.linspace(num,num+LHS_4.shape[0]-1,LHS_4.shape[0]).unsqueeze(-1).repeat(1,LHS_4.shape[1]).to(self.device)
         idx4 = torch.stack([idx4,dimk],dim=2).reshape(-1,2)
 
-        num += LHS_4.shape[0]
+        num = 0
         # LHS5: q'hej
         LHS_5 = ot[self.u_left,...,:self.variable_list[0],:]
         RHS_5 = torch.ones_like(ot[self.u_left,0,:self.variable_list[0],0])
@@ -361,7 +362,7 @@ class Vortex_L(Random_Basis_Function_L):
         dimk = torch.linspace(num,num+LHS_5.shape[0]-1,LHS_5.shape[0]).unsqueeze(-1).repeat(1,LHS_5.shape[1]).to(self.device)
         idx5 = torch.stack([idx5,dimk],dim=2).reshape(-1,2)
 
-        num += LHS_5.shape[0]
+        num = 0
         # LHS6: q'hej
         LHS_6 = ot[self.init_pts]
         RHS_6 = torch.zeros_like(ot[self.init_pts,0,:,0])
@@ -371,29 +372,74 @@ class Vortex_L(Random_Basis_Function_L):
         dimk = torch.linspace(num,num+LHS_6.shape[0]-1,LHS_6.shape[0]).unsqueeze(-1).repeat(1,LHS_6.shape[1]).to(self.device)
         idx6 = torch.stack([idx6,dimk],dim=2).reshape(-1,2)
 
-        LHS = [LHS_1,LHS_2,LHS_3,LHS_4,LHS_5,LHS_6]
-        RHS = [RHS_1,RHS_2,RHS_3,RHS_4,RHS_5,RHS_6]
-        idx = [idx1,idx2,idx3,idx4,idx5,idx6]
+        LHS_tp = [LHS_1,LHS_2,LHS_3,LHS_4,LHS_5,LHS_6]
+        RHS_tp = [RHS_1,RHS_2,RHS_3,RHS_4,RHS_5,RHS_6]
+        idx_tp = [idx1,idx2,idx3,idx4,idx5,idx6]
 
-
+        LHS = []
+        RHS = []
+        idx = []
+        num = 0
+        for i,LHS_ in enumerate(LHS_tp):
+            max_x = torch.abs(LHS_).max()
+            if max_x>0.0:
+                LHS_ = LHS_/max_x
+                LHS.append(LHS_)
+                RHS.append(RHS_tp[i]/max_x)
+                idx_tp[i][:,1] = idx_tp[i][:,1] + num
+                idx.append(idx_tp[i])
+                num += LHS_.shape[0] 
         #LHS: q?h?ej
         q = sum([i.shape[0] for i in LHS])
         h = self.num_time_feature*self.num_spatial_basis*self.variable_num*self.num_per_point_feature
+        
         LHS = torch.cat([i.reshape(-1) for i in LHS],dim=0)
         idx = torch.cat(idx,dim=0).long()
-        A = torch.sparse_coo_tensor(idx.transpose(0,1),LHS,[q,h]).to_sparse_csr()
-        b = torch.cat(RHS,dim=0).unsqueeze(1)
+        #mask = (LHS==0)
+        #LHS = LHS[~mask]
+        #idx = idx[~mask]
+
+        print(LHS.shape,idx.shape)
+        print(h)
+        idx = torch.stack([idx[:,1],idx[:,0]],dim=1)
+
+        # cuda cupy ver
+        #A = torch.sparse_coo_tensor(idx.transpose(0,1),LHS,[q,h])
+        #b = torch.cat(RHS,dim=0)
+
+        # numpy ver
+        LHS = LHS.double().detach().cpu().numpy()
+        idx = idx.detach().cpu().numpy()
+        A = sparse.coo_matrix((LHS,(idx[:,0],idx[:,1])),shape=(q,h)).tocsr()
+        b = torch.cat(RHS,dim=0).unsqueeze(1).detach().cpu().numpy()
+        print(b.shape)
         return A,b
 
     def sparse_solver(self,A,b):
-        
-        out = torch.randint(1, (b.shape[0],), dtype=torch.float64)
-        torch.linalg.solve(A, b)
+        A_ = torch.sparse.mm(A.transpose(0,1),A)
+        b = A.transpose(0,1)@b
+        #out = torch.randint(1, (b.shape[0],), dtype=torch.float64)
+        out = sparse_solve(A_, b)
         return out
 
     def matrix_solver(self):
         A,b = self.sparse_matrix_recon(self.total_samples,self.t,self.norm)
-        out = self.sparse_solver(A,b)
+        # cuda cupy ver
+        #with torch.no_grad():
+        #    out = self.sparse_solver(A,b)
+        # numpy ver
+        #A = A[:,A.getnnz(0)>0]
+        #lock = A.getnnz(1)>0
+        #A = A[lock,:]
+        #b = b[lock,:]
+        
+        AT = A.transpose(copy=True)
+        print(AT.shape)
+        A_ = AT@A
+        b = AT@b
+        print(A_.shape)
+        out = sparse.linalg.lsqr(A_,b,atol=0,btol=0,conlim=0)
+        print(out,b.shape[0])
 
     def sample_field(self, resolution, boundary_num, return_samples=False):
         """sample current field with uniform grid points"""
