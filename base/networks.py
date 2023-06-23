@@ -120,7 +120,7 @@ def PoU(x):
 
 def PoU_simple(x):
     x_o = torch.zeros_like(x)
-    x_o = torch.where((x>=(-1)&(x<=1)),.1,x_o)
+    x_o = torch.where((x>=(-1)&(x<=1)),1,x_o)
     return x_o
 
 # this is a heavy implementation
@@ -235,6 +235,7 @@ class Random_Basis_Function_L(object):
     # input for the layer is set for [-1,1]
     def  __init__(self,cfg):
         self.cfg = cfg
+        torch.manual_seed(cfg.seed)
         self.num_per_point_feature = cfg.num_per_point_feature
         self.num_time_feature = cfg.time_num
         self.time_length = self.cfg.time_length
@@ -380,14 +381,21 @@ class Random_Basis_Function_L(object):
         ot = self.non_linear(sptail_val+time_val+bias_process)
         #A,t,b: qhej; u:qhej
         x_weight,t_weight = self.get_sparsity(x_,t_)
+        
         #x_weight, t_weight: qh,qh'
         # something should be wrong here
-        ot =  x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None]*ot
-        print(ot.shape)
+        # ot =  x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None]*ot
+        # print(x_weight)
+        
         q_,h_,e_,j_ = ot.shape
         ot = ot.reshape(ot.shape[0],-1)
+
         L1,_ = jacobian(ot, x)
+
         L1 = L1.reshape(q_,h_,e_,j_,-1)
+        # L1_p = L1.reshape(q_,-1)
+        # L1_p = torch.sum(torch.abs(L1_p),dim=-1)
+        # print(torch.argwhere(L1_p==0))
         #L2 = hessian(ot.unsqueeze(-1), x_.unsqueeze(1).repeat(1,ot.shape[1],1))
         # Actually, we do not have Hessian
         L2 = None
@@ -397,11 +405,14 @@ class Random_Basis_Function_L(object):
         # B1 = None
         # if norm is not None:
         #     B1 = L1[boundary] * norm.unsqeeze(1)
+        #print("ot",L1[0])
         return L1,L2,Lt,ot,idx   
 
     def get_sparsity(self,x,t):
+        #print(x,t)
         x_= self.PoU(x)
         t_ = self.PoU(t)
+        #print(x_.reshape(-1),t_.reshape(-1))
         return x_,t_
     
     def inference(self,x,t):

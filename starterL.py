@@ -20,11 +20,12 @@ cfg.num_spatial_basis = 400
 cfg.variable_num = 3
 cfg.dim = 2
 cfg.device = 'cuda'
-cfg.band_width = 0.01
+cfg.band_width = 10
 cfg.log_dir = './log'
 cfg.n_timesteps = 100000
 cfg.neighbor_K  = 6
 cfg.vis_resolution = 100
+cfg.seed = 213421
 model = Vortex_L(cfg)
 
 for t in range(cfg.n_timesteps + 1):
