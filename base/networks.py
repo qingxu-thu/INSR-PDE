@@ -259,7 +259,8 @@ class Random_Basis_Function_L(object):
         self.tb = None
 
     def x_process(self,x,x_0,bandwidth):
-        x = (x[:,None,:]-x_0[:,:,:])/bandwidth
+        print(x.shape,x_0.shape)
+        x = (x[:,:,None,:]-x_0[:,:,:,:])/bandwidth
         return x
 
     def t_process(self,t,t_0,bandwidth):
@@ -274,9 +275,9 @@ class Random_Basis_Function_L(object):
         length, dim = coords.shape
         self.num_spatial_basis = coords.shape[0]
         print(self.num_spatial_basis)
-        t =  torch.linspace(0,end_time,time_num, device=self.device).unsqueeze(1).repeat(1,length).reshape(-1,1)
+        t =  torch.linspace(0,end_time,time_num, device=self.device).unsqueeze(1).repeat(1,length)
         coords = coords.unsqueeze(0).repeat(time_num,1,1)
-        coords = coords.reshape(-1,dim)
+        #coords = coords.reshape(-1,dim)
         #print(coords.shape,t.shape)
         return coords,t
 
@@ -316,30 +317,33 @@ class Random_Basis_Function_L(object):
         return x_,t_,idx
 
     def neighbor_search_spatial(self,x_):
+        #print(x_.shape,self.basis_point.shape)
         bz = x_.shape[0]
+        pts_num = x_.shape[1]
         dim = x_.shape[-1]
         #tdim = t_.shape[-1]
         #xt_ = torch.cat([x_],dim=1).unsqueeze(0)
-        xt_ = x_.unsqueeze(0)
-        plex = self.basis_point.unsqueeze(0)
+        xt_ = x_
+        plex = self.basis_point
+        #print(xt_.shape,plex.shape)
         #xt_[:,-1] *= (self.band_width/self.time_band_width)*1
         #x_ = x_.unsqueeze(1)
         #print(x_.shape,plex.shape)
-        
+        print(xt_.shape,plex.shape)
         _,idx,_ = knn_points(xt_,plex,K=self.neighbor_K,return_nn=False)
         p_reduce = knn_gather(plex,idx)
-        
+        print(p_reduce.shape)
+        #print(p_reduce.shape)
         # Might be some problem with x_process
         # —p_reduce: bz,1,k,tdim
         # x_0 = p_reduce[...,:-1]
         # t_0 = p_reduce[...,-1]*(self.time_band_width/self.band_width)/1
-        x_0 = p_reduce.reshape(bz,self.neighbor_K,dim)
+        x_0 = p_reduce.reshape(bz,pts_num,self.neighbor_K,dim)
         # t_0 = t_0.reshape(bz,self.neighbor_K,tdim)
         # print(x_.shape,x_0.shape)
         # print(x_,x_0,self.band_width)
-        print(x_0.shape,x_.shape)
+        #print(x_0.shape,x_.shape)
         x_ = self.x_process(x_,x_0,self.band_width)
-        #t_ = self.t_process(t_,t_0,self.time_band_width).squeeze(-1)
         idx = idx.squeeze(0)
         return x_,idx
     
