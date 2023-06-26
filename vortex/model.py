@@ -222,10 +222,10 @@ class Vortex_L(Random_Basis_Function_L):
     def num_process(self):
         points = torch.linspace(0,self.time_num*(self.colloation_pts_num+self.boundary_num)-1,self.time_num*(self.colloation_pts_num+self.boundary_num),device=self.device).reshape(self.time_num,-1)
         self.inner_pts = points[1:,:self.colloation_pts_num].reshape(-1).long()
-        self.dir_bound = points[1:,self.colloation_pts_num+self.u_boundary:self.colloation_pts_num+self.u_boundary+self.p_boundary].reshape(-1).long()
+        self.dir_bound = points[1:,self.colloation_pts_num+self.u_boundary:self.colloation_pts_num+self.p_boundary].reshape(-1).long()
         self.neu_bound = points[1:,self.colloation_pts_num:self.colloation_pts_num+self.u_boundary].reshape(-1).long()
-        self.u_left = points[:,self.colloation_pts_num+self.boundary_num-self.u_boundary_left:].reshape(-1).long()
-        self.init_pts = points[0,:self.colloation_pts_num+self.boundary_num-self.u_boundary_left].reshape(-1).long()
+        self.u_left = points[:,self.colloation_pts_num+self.p_boundary:].reshape(-1).long()
+        self.init_pts = points[0,:self.colloation_pts_num+self.p_boundary].reshape(-1).long()
 
     def train(self):
         self.optim.zero_grad()
@@ -266,17 +266,21 @@ class Vortex_L(Random_Basis_Function_L):
             loss += self.mse_loss(i,j) 
         return loss
 
+
     def expand_idx(self,idx_,e0,e1):
         # idx:qh
         j = self.num_per_point_feature
         idx_list = []
         for i in range(e0,e1):
-            K = self.idx_box.reshape(-1,self.variable_num,j)[:,i,:].expand(idx_.shape[0],-1,-1)
+            #K = self.idx_box.reshape(-1,self.variable_num,j)[:,i,:].expand(idx_.shape[0],-1,-1)
+            K = self.idx_box.reshape(-1,self.variable_num,j).permute(1,0,2)[i,:,:].expand(idx_.shape[0],-1,-1)
             idx = idx_.unsqueeze(-1).expand(-1,-1,j)
+            
             idx = torch.gather(K,1,idx).reshape(idx.shape[0],-1)
             idx_list.append(idx)
         idx = torch.cat(idx_list,dim=0)
         return idx
+        
 
     def expand_idx_norm(self,idx_,e0,e1):
         # idx:qh
@@ -292,6 +296,9 @@ class Vortex_L(Random_Basis_Function_L):
     def sparse_matrix_recon(self,x,t,norm):
         #TODO: NEED TO FIX THE 1,2's q position
         #TODO: the problem for idx need to refixed for number
+
+        print(x,t)
+
         L1,L2,Lt,ot,idx = self.matrix_ids(x,t)
         j = self.num_per_point_feature
         ## Sparse Matrix Shape: (tnej) * (qq) * (tnej)
@@ -370,6 +377,7 @@ class Vortex_L(Random_Basis_Function_L):
         RHS_5[...,0] = self.internal_v
         LHS_5 = LHS_5.permute(0,2,1,3).reshape(self.u_left.shape[0]*self.variable_list[0],-1)
         RHS_5 = RHS_5.reshape(self.u_left.shape[0]*self.variable_list[0])
+        # NEED TO FIX 
         idx5 = self.expand_idx(idx[self.u_left],0,self.variable_list[0]) #(qe)hj
         dimk = torch.linspace(num,num+LHS_5.shape[0]-1,LHS_5.shape[0]).unsqueeze(-1).repeat(1,LHS_5.shape[1]).to(self.device)
         idx5 = torch.stack([idx5,dimk],dim=2).reshape(-1,2)
@@ -394,8 +402,8 @@ class Vortex_L(Random_Basis_Function_L):
         num = 0
         for i,LHS_ in enumerate(LHS_tp):
             max_x = torch.abs(LHS_).max()
-            if max_x>0.0 and i<1:
-                LHS.append(LHS_)
+            if max_x>0.0:
+                LHS.append(LHS_/max_x)
                 RHS.append(RHS_tp[i]/max_x)
                 idx_tp[i][:,1] = idx_tp[i][:,1] + num
                 idx.append(idx_tp[i])
@@ -431,6 +439,7 @@ class Vortex_L(Random_Basis_Function_L):
         b = A.transpose(0,1)@b
         #out = torch.randint(1, (b.shape[0],), dtype=torch.float64)
         out = sparse_solve(A_, b)
+
         return out
 
     def matrix_solver(self):
@@ -439,9 +448,11 @@ class Vortex_L(Random_Basis_Function_L):
         #with torch.no_grad():
         #    out = self.sparse_solver(A,b)
         # numpy ver
-        print(A.shape)
+        #print(A.shape)
+        utz = A.shape[1]
+        idx = (A.getnnz(0)>0)
         A = A[:,A.getnnz(0)>0]
-        print(A.shape)
+        #print(A.shape)
         # lock = A.getnnz(1)>0
         # A = A[lock,:]
         # b = b[lock,:]
@@ -452,7 +463,17 @@ class Vortex_L(Random_Basis_Function_L):
         # b_ = AT@b
         # print(A_.shape)
         out = sparse.linalg.lsqr(A,b)
-        print(out)
+        a,b,c,d = self.u_.shape
+        u = out[0]
+        ut = np.zeros(utz)
+        ut[idx] = u
+        # print(ut)
+        # print(u)
+        ut = torch.from_numpy(ut).to(self.device)
+        self.u_ = self.u_.reshape(-1)
+        self.u_ = ut
+        self.u_ = self.u_.reshape(a,b,c,d)
+        #print(out)
         # print(A.shape,out[0].shape,b.shape)
         # print(np.linalg.norm(A@out[0]-b))
 
@@ -471,10 +492,14 @@ class Vortex_L(Random_Basis_Function_L):
         """visualization on tb during training"""
         velos, samples = self.sample_field(self.vis_resolution,self.vis_resolution//20, return_samples=True)
         velos = velos.detach().cpu().numpy()
+        print(velos)
         samples = samples.detach().cpu().numpy()
+        velos = velos.reshape(self.time_num,-1,self.variable_list[1])
+        samples = samples.reshape(self.time_num,-1,2)
         print(velos.shape,samples.shape)
-        fig = draw_vector_field2D(velos[:,:self.variable_list[0]], samples)
-        self.tb.add_figure("velocity", fig)
+        for i in range(self.time_num):
+            fig = draw_vector_field2D(velos[i,:,:self.variable_list[0]], samples[i,:,:])
+            self.tb.add_figure("velocity"+"time_"+str(i), fig)
 
 
     # def write_output(self, output_folder):

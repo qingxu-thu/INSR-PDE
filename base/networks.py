@@ -120,7 +120,8 @@ def PoU(x):
 
 def PoU_simple(x):
     x_o = torch.zeros_like(x)
-    x_o = torch.where((x>=(-1)&(x<=1)),1,x_o)
+    #print(x[432])
+    x_o = torch.where(torch.logical_and(x>=(-1),(x<=1)),1,x_o)
     return x_o
 
 # this is a heavy implementation
@@ -271,6 +272,8 @@ class Random_Basis_Function_L(object):
         coords = torch.stack(torch.meshgrid([coords] * dim, indexing='ij'), dim=-1)
         coords = coords.reshape(resolution**dim, dim)
         length, dim = coords.shape
+        self.num_spatial_basis = coords.shape[0]
+        print(self.num_spatial_basis)
         t =  torch.linspace(0,end_time,time_num, device=self.device).unsqueeze(1).repeat(1,length).reshape(-1,1)
         coords = coords.unsqueeze(0).repeat(time_num,1,1)
         coords = coords.reshape(-1,dim)
@@ -294,8 +297,8 @@ class Random_Basis_Function_L(object):
         tdim = t_.shape[-1]
         xt_ = torch.cat([x_,t_],dim=1).unsqueeze(0)
         
-        plex = torch.cat([self.basis_point,self.basis_time*(self.band_width/self.time_band_width)],dim=1).unsqueeze(0)
-        xt_[:,-1] *= (self.band_width/self.time_band_width)
+        plex = torch.cat([self.basis_point,self.basis_time*(self.band_width/self.time_band_width*1)],dim=1).unsqueeze(0)
+        xt_[:,-1] *= (self.band_width/self.time_band_width)*1
         #x_ = x_.unsqueeze(1)
         _,idx,_ = knn_points(xt_,plex,K=self.neighbor_K,return_nn=False)
         p_reduce = knn_gather(plex,idx)
@@ -303,7 +306,7 @@ class Random_Basis_Function_L(object):
         # Might be some problem with x_process
         #—p_reduce: bz,1,k,tdim
         x_0 = p_reduce[...,:-1]
-        t_0 = p_reduce[...,-1]*(self.time_band_width/self.band_width)
+        t_0 = p_reduce[...,-1]*(self.time_band_width/self.band_width)/1
         x_0 = x_0.reshape(bz,self.neighbor_K,dim)
         t_0 = t_0.reshape(bz,self.neighbor_K,tdim)
         #print(x_,x_0,self.band_width)
@@ -312,6 +315,34 @@ class Random_Basis_Function_L(object):
         idx = idx.squeeze(0)
         return x_,t_,idx
 
+    def neighbor_search_spatial(self,x_):
+        bz = x_.shape[0]
+        dim = x_.shape[-1]
+        #tdim = t_.shape[-1]
+        #xt_ = torch.cat([x_],dim=1).unsqueeze(0)
+        xt_ = x_.unsqueeze(0)
+        plex = self.basis_point.unsqueeze(0)
+        #xt_[:,-1] *= (self.band_width/self.time_band_width)*1
+        #x_ = x_.unsqueeze(1)
+        #print(x_.shape,plex.shape)
+        
+        _,idx,_ = knn_points(xt_,plex,K=self.neighbor_K,return_nn=False)
+        p_reduce = knn_gather(plex,idx)
+        
+        # Might be some problem with x_process
+        # —p_reduce: bz,1,k,tdim
+        # x_0 = p_reduce[...,:-1]
+        # t_0 = p_reduce[...,-1]*(self.time_band_width/self.band_width)/1
+        x_0 = p_reduce.reshape(bz,self.neighbor_K,dim)
+        # t_0 = t_0.reshape(bz,self.neighbor_K,tdim)
+        # print(x_.shape,x_0.shape)
+        # print(x_,x_0,self.band_width)
+        print(x_0.shape,x_.shape)
+        x_ = self.x_process(x_,x_0,self.band_width)
+        #t_ = self.t_process(t_,t_0,self.time_band_width).squeeze(-1)
+        idx = idx.squeeze(0)
+        return x_,idx
+    
 
     def forward(self,x,t):
         # Actually, we do not need to do all this on the gpus
@@ -382,9 +413,12 @@ class Random_Basis_Function_L(object):
         #A,t,b: qhej; u:qhej
         x_weight,t_weight = self.get_sparsity(x_,t_)
         
+
+        #print("x_weight",x_weight)
+        
         #x_weight, t_weight: qh,qh'
         # something should be wrong here
-        # ot =  x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None]*ot
+        ot =  x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None]*ot
         # print(x_weight)
         
         q_,h_,e_,j_ = ot.shape
@@ -445,7 +479,10 @@ class Random_Basis_Function_L(object):
         #A,t,b: qhej; u:qhej
         x_weight,t_weight = self.get_sparsity(x_,t_)
         #x_weight, t_weight: qh,qh
+        #print(u_process.shape,)
         ot = x_weight[...,0][...,None,None]*x_weight[...,1][...,None,None]*t_weight[...,None,None]*u_process*ot
+        
+        # print(ot,u_process)
         ot = torch.sum(torch.sum(ot,dim=-1),dim=1)
         # ot:qe
         return ot   

@@ -13,7 +13,7 @@ cfg.time_num = 10
 cfg.colloation_pts_num  = 1000
 cfg.boundary_num = 400
 cfg.output_path = './results' 
-cfg.gravity = 9.8
+cfg.gravity = 0
 cfg.num_per_point_feature = 16
 cfg.time_length = 1
 cfg.num_spatial_basis = 400
@@ -33,4 +33,4 @@ for t in range(cfg.n_timesteps + 1):
     #model.train()
     #model._vis_velocity()
     model.matrix_solver()
-
+    model._vis_velocity()
