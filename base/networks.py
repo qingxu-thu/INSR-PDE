@@ -253,7 +253,8 @@ class Random_Basis_Function_L(object):
         self.time_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
         self.bias = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
         self.u_ = torch.nn.Parameter(torch.randn(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,device=self.device))
-        self.idx_box = torch.linspace(0,self.num_time_feature*self.num_spatial_basis*self.variable_num*self.num_per_point_feature-1,self.num_time_feature*self.num_spatial_basis*self.variable_num*self.num_per_point_feature,device=self.device).reshape(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature)
+        self.idx_box = torch.linspace(0,self.num_spatial_basis*self.variable_num*self.num_per_point_feature-1,self.num_spatial_basis*self.variable_num*self.num_per_point_feature,device=self.device)
+        self.idx_box = self.idx_box.reshape(self.num_spatial_basis,self.variable_num,self.num_per_point_feature)
         self.PoU = PoU_simple
         self.non_linear = nn.Sigmoid()
         self.tb = None
@@ -344,9 +345,22 @@ class Random_Basis_Function_L(object):
         # print(x_,x_0,self.band_width)
         #print(x_0.shape,x_.shape)
         x_ = self.x_process(x_,x_0,self.band_width)
-        idx = idx.squeeze(0)
         return x_,idx
     
+
+    def neighbor_search_single(self,x_):
+        bz = x_.shape[0]
+        pts_num = x_.shape[1]
+        dim = x_.shape[-1]
+        xt_ = x_
+        plex = self.basis_point
+        _,idx,_ = knn_points(xt_,plex,K=self.neighbor_K,return_nn=False)
+        p_reduce = knn_gather(plex,idx)
+        x_0 = p_reduce.reshape(bz,pts_num,self.neighbor_K,dim)
+        x_ = self.x_process(x_,x_0,self.band_width)
+        idx = idx.squeeze(0)
+        x_ = x_.squeeze(0)
+        return x_,idx
 
     def forward(self,x,t):
         # Actually, we do not need to do all this on the gpus
@@ -390,6 +404,38 @@ class Random_Basis_Function_L(object):
         # if norm is not None:
         #     B1 = L1[boundary] * norm.unsqeeze(1)
         return L1,L2,Lt,ot
+    
+    def semi_lagrangian_advection(self,samples,prev_u,time):
+        backtracked_position = samples - prev_u * self.cfg.dt
+        backtracked_position = torch.clamp(backtracked_position, min=-1.0, max=1.0)
+        # we need a neighbor mechanism and derive the speed
+        x_,idx = self.neighbor_search_single(backtracked_position.unsqueeze(0))
+        total_ = model.num_time_feature*model.num_spatial_basis
+        h = idx.shape[1]
+        bz = idx.shape[0]
+        
+        A_process = model.spatial_A[time].reshape(model.num_spatial_basis,-1)
+        A_process = A_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,A_process.shape[-1]) 
+        print(A_process.shape,idx_.shape)
+        A_process = torch.gather(A_process,1,idx_)
+        A_process = A_process.reshape(-1,h,model.variable_num,model.num_per_point_feature,model.dim)
+        bias_process = model.bias[time].reshape(model.num_spatial_basis,-1)
+        bias_process = bias_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,bias_process.shape[-1]) 
+        bias_process = torch.gather(bias_process,1,idx_).reshape(-1,h,model.variable_num,model.num_per_point_feature)
+        print(x_.shape)
+        u_process = self.u_[time].reshape(model.num_spatial_basis,-1)
+        u_process = u_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,u_process.shape[-1])
+        u_process = torch.gather(u_process,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature)
+        sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
+        #time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
+        ot = model.non_linear(sptail_val+bias_process)
+        
+        u_current = torch.einsum('qhej,qhej->qe',ot,u_process)
+        return u_current[:,:2] 
+        
     
     def matrix_ids(self,x,t):
         x_,t_,idx = self.neighbor_search(x,t)

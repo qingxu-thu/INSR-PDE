@@ -221,11 +221,11 @@ class Vortex_L(Random_Basis_Function_L):
 
     def num_process(self):
         points = torch.linspace(0,(self.colloation_pts_num+self.boundary_num)-1,(self.colloation_pts_num+self.boundary_num),device=self.device).reshape(1,-1)
-        self.inner_pts = points[1:,:self.colloation_pts_num].reshape(-1).long()
-        self.dir_bound = points[1:,self.colloation_pts_num+self.u_boundary:self.colloation_pts_num+self.p_boundary].reshape(-1).long()
-        self.neu_bound = points[1:,self.colloation_pts_num:self.colloation_pts_num+self.u_boundary].reshape(-1).long()
-        self.u_left = points[:,self.colloation_pts_num+self.p_boundary:].reshape(-1).long()
-        self.init_pts = points[0,:self.colloation_pts_num+self.p_boundary].reshape(-1).long()
+        self.inner_pts = points[:self.colloation_pts_num].reshape(-1).long()
+        self.dir_bound = points[self.colloation_pts_num+self.u_boundary:self.colloation_pts_num+self.p_boundary].reshape(-1).long()
+        self.neu_bound = points[self.colloation_pts_num:self.colloation_pts_num+self.u_boundary].reshape(-1).long()
+        self.u_left = points[self.colloation_pts_num+self.p_boundary:].reshape(-1).long()
+        self.init_pts = points[:self.colloation_pts_num+self.p_boundary].reshape(-1).long()
 
     def train(self):
         self.optim.zero_grad()
