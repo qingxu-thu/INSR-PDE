@@ -112,10 +112,11 @@ def t_process(t,t_0,bandwidth):
 # x.shape == x_0.shape
 def PoU(x):
     x_o = torch.zeros_like(x)
-    x_o = torch.where((x>=(-5/4)&(x<-3/4)),.5+torch.sin(2*torch.pi*x)/2,x_o)
-    x_o = torch.where((x>=(-3/4)&(x<3/4)),.1,x_o)
-    x_o = torch.where((x>=(3/4)&(x<5/4)),.5-torch.sin(2*torch.pi*x)/2,x_o)
-    x_o = x_o[...,0] * x_o[...,1]
+    #print(x)
+    x_o = torch.where(torch.logical_and(x>=(-5/4),(x<-3/4)),.5+torch.sin(2*torch.pi*x)/2,x_o)
+    x_o = torch.where(torch.logical_and(x>=(-3/4),(x<3/4)),1,x_o)
+    x_o = torch.where(torch.logical_and(x>=(3/4),(x<5/4)),.5-torch.sin(2*torch.pi*x)/2,x_o)
+    # x_o = x_o[...,0] * x_o[...,1]
     return x_o 
 
 def PoU_simple(x):
@@ -248,19 +249,19 @@ class Random_Basis_Function_L(object):
         self.neighbor_K = cfg.neighbor_K
         self.device = self.cfg.device
         self.basis_point,self.basis_time = self.generate_basis(self.num_spatial_basis,self.num_time_feature,self.time_length,self.dim)
-        self.band_width = cfg.band_width
+        #self.band_width = cfg.band_width
         self.spatial_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,self.dim),device=self.device)
         self.time_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
         self.bias = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
         self.u_ = torch.nn.Parameter(torch.randn(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,device=self.device))
         self.idx_box = torch.linspace(0,self.num_spatial_basis*self.variable_num*self.num_per_point_feature-1,self.num_spatial_basis*self.variable_num*self.num_per_point_feature,device=self.device)
         self.idx_box = self.idx_box.reshape(self.num_spatial_basis,self.variable_num,self.num_per_point_feature)
-        self.PoU = PoU_simple
+        self.PoU = PoU
         self.non_linear = nn.Sigmoid()
         self.tb = None
 
     def x_process(self,x,x_0,bandwidth):
-        print(x.shape,x_0.shape)
+        #print(x.shape,x_0.shape)
         x = (x[:,:,None,:]-x_0[:,:,:,:])/bandwidth
         return x
 
@@ -273,9 +274,10 @@ class Random_Basis_Function_L(object):
         coords = torch.linspace(0.5, resolution - 0.5, resolution, device=self.device) / resolution * 2 - 1
         coords = torch.stack(torch.meshgrid([coords] * dim, indexing='ij'), dim=-1)
         coords = coords.reshape(resolution**dim, dim)
+        self.band_width = 2/resolution
         length, dim = coords.shape
         self.num_spatial_basis = coords.shape[0]
-        print(self.num_spatial_basis)
+        #print(self.num_spatial_basis)
         t =  torch.linspace(0,end_time,time_num, device=self.device).unsqueeze(1).repeat(1,length)
         coords = coords.unsqueeze(0).repeat(time_num,1,1)
         #coords = coords.reshape(-1,dim)
@@ -330,10 +332,10 @@ class Random_Basis_Function_L(object):
         #xt_[:,-1] *= (self.band_width/self.time_band_width)*1
         #x_ = x_.unsqueeze(1)
         #print(x_.shape,plex.shape)
-        print(xt_.shape,plex.shape)
+        #print(xt_.shape,plex.shape)
         _,idx,_ = knn_points(xt_,plex,K=self.neighbor_K,return_nn=False)
         p_reduce = knn_gather(plex,idx)
-        print(p_reduce.shape)
+        #print(p_reduce.shape)
         #print(p_reduce.shape)
         # Might be some problem with x_process
         # —p_reduce: bz,1,k,tdim
@@ -348,12 +350,13 @@ class Random_Basis_Function_L(object):
         return x_,idx
     
 
-    def neighbor_search_single(self,x_):
+    def neighbor_search_single(self,x_,time):
         bz = x_.shape[0]
         pts_num = x_.shape[1]
         dim = x_.shape[-1]
         xt_ = x_
-        plex = self.basis_point
+        plex = self.basis_point[time].unsqueeze(0)
+        #print(x_.shape,plex.shape)
         _,idx,_ = knn_points(xt_,plex,K=self.neighbor_K,return_nn=False)
         p_reduce = knn_gather(plex,idx)
         x_0 = p_reduce.reshape(bz,pts_num,self.neighbor_K,dim)
@@ -406,35 +409,43 @@ class Random_Basis_Function_L(object):
         return L1,L2,Lt,ot
     
     def semi_lagrangian_advection(self,samples,prev_u,time):
+        samples = samples[time].detach().requires_grad_(True)
+        
         backtracked_position = samples - prev_u * self.cfg.dt
+        #print(backtracked_position.shape,prev_u.shape)
         backtracked_position = torch.clamp(backtracked_position, min=-1.0, max=1.0)
         # we need a neighbor mechanism and derive the speed
-        x_,idx = self.neighbor_search_single(backtracked_position.unsqueeze(0))
-        total_ = model.num_time_feature*model.num_spatial_basis
+        x_,idx = self.neighbor_search_single(backtracked_position.unsqueeze(0),time)
+        total_ = self.num_time_feature*self.num_spatial_basis
         h = idx.shape[1]
         bz = idx.shape[0]
         
-        A_process = model.spatial_A[time].reshape(model.num_spatial_basis,-1)
+        A_process = self.spatial_A[time-1].reshape(self.num_spatial_basis,-1)
         A_process = A_process.unsqueeze(0).expand(bz,-1,-1)
         idx_ = idx.unsqueeze(-1).expand(-1,-1,A_process.shape[-1]) 
-        print(A_process.shape,idx_.shape)
+        #print(A_process.shape,idx_.shape)
         A_process = torch.gather(A_process,1,idx_)
-        A_process = A_process.reshape(-1,h,model.variable_num,model.num_per_point_feature,model.dim)
-        bias_process = model.bias[time].reshape(model.num_spatial_basis,-1)
+        A_process = A_process.reshape(-1,h,self.variable_num,self.num_per_point_feature,self.dim)
+        bias_process = self.bias[time-1].reshape(self.num_spatial_basis,-1)
         bias_process = bias_process.unsqueeze(0).expand(bz,-1,-1)
         idx_ = idx.unsqueeze(-1).expand(-1,-1,bias_process.shape[-1]) 
-        bias_process = torch.gather(bias_process,1,idx_).reshape(-1,h,model.variable_num,model.num_per_point_feature)
-        print(x_.shape)
-        u_process = self.u_[time].reshape(model.num_spatial_basis,-1)
+        bias_process = torch.gather(bias_process,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature)
+        #print(x_.shape)
+        u_process = self.u_[time-1].reshape(self.num_spatial_basis,-1)
         u_process = u_process.unsqueeze(0).expand(bz,-1,-1)
         idx_ = idx.unsqueeze(-1).expand(-1,-1,u_process.shape[-1])
         u_process = torch.gather(u_process,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature)
         sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
         #time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
-        ot = model.non_linear(sptail_val+bias_process)
-        
+        ot = self.non_linear(sptail_val+bias_process)
+
+        x_weight = self.PoU(x_)
+        x_weight = x_weight[...,0] * x_weight[...,1]
+        ot = ot * x_weight[...,None,None]
+
         u_current = torch.einsum('qhej,qhej->qe',ot,u_process)
-        return u_current[:,:2] 
+        L1 = divergence(u_current[:,:2], samples)
+        return u_current[:,:2], L1, backtracked_position 
         
     
     def matrix_ids(self,x,t):
@@ -537,3 +548,43 @@ class Random_Basis_Function_L(object):
         # ot:qe
         return ot   
 
+
+    def inference_time(self,x,t):
+        # x_: Q * dim
+        
+        x_,idx = self.neighbor_search_single(x[t].unsqueeze(0),t)
+        #print("idx",idx.shape)
+        total_ = self.num_time_feature*self.num_spatial_basis
+        h = idx.shape[1]
+        bz = idx.shape[0]
+        #print(x.shape)
+        A_process = self.spatial_A[t].reshape(self.num_spatial_basis,-1)
+        A_process = A_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,A_process.shape[-1]) 
+        #print(A_process.shape,idx_.shape)
+        A_process = torch.gather(A_process,1,idx_)
+        A_process = A_process.reshape(-1,h,self.variable_num,self.num_per_point_feature,self.dim)
+        bias_process = self.bias[t].reshape(self.num_spatial_basis,-1)
+        bias_process = bias_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,bias_process.shape[-1]) 
+        bias_process = torch.gather(bias_process,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature)
+        #print(x_.shape)
+        u_process = self.u_[t].reshape(self.num_spatial_basis,-1)
+        #print("u_procsss",u_process)
+        u_process = u_process.unsqueeze(0).expand(bz,-1,-1)
+        idx_ = idx.unsqueeze(-1).expand(-1,-1,u_process.shape[-1])
+        u_process = torch.gather(u_process,1,idx_).reshape(-1,h,self.variable_num,self.num_per_point_feature)
+        sptail_val = torch.einsum('qhejd,qhd->qhej',A_process,x_)
+        #print(sptail_val[0])
+        #time_val = torch.einsum('qhej,qh->qhej',t_process_,t_)
+        ot = self.non_linear(sptail_val+bias_process)
+        
+        x_weight = self.PoU(x_)
+        x_weight = x_weight[...,0] * x_weight[...,1]
+        ot = ot * x_weight[...,None,None]
+
+
+        #print(ot,u_process)
+        u_current = torch.einsum('qhej,qhej->qe',ot,u_process)
+        #print(ot.shape)
+        return u_current[:,:2], u_current[:,2]

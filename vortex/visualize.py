@@ -4,13 +4,24 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 
+def draw_vector_field2D_ut(vel, coords):
+    u, v = vel[..., 0], vel[..., 1]
+    x, y = coords[..., 0], coords[..., 1]
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.quiver(x, y, u, v, scale=100000, scale_units='width')
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+    fig.tight_layout()
+    return fig
+
 def draw_vector_field2D(vel, coords):
     u, v = vel[..., 0], vel[..., 1]
     x, y = coords[..., 0], coords[..., 1]
 
     fig, ax = plt.subplots(figsize=(5, 5))
     #ax.quiver(x, y, u, v, scale=u.shape[0], scale_units='width')
-    vt = u**2+v**2
+    vt = np.sqrt(v**2+u**2)
     # ct = vt[:,None]*np.array([[0,0,1]])/np.max(vt)
     # print(ct.shape,vt)
     #print(np.max(vt),vt)
@@ -20,6 +31,21 @@ def draw_vector_field2D(vel, coords):
     fig.tight_layout()
     return fig
 
+def draw_sc_field2D(vel, coords):
+    u = vel[..., 0]
+    x, y = coords[..., 0], coords[..., 1]
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    #ax.quiver(x, y, u, v, scale=u.shape[0], scale_units='width')
+    vt = u
+    # ct = vt[:,None]*np.array([[0,0,1]])/np.max(vt)
+    # print(ct.shape,vt)
+    #print(np.max(vt),vt)
+    ax.scatter(x, y, c = vt,vmin=-2,vmax=2)
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+    fig.tight_layout()
+    return fig
 
 def draw_scalar_field2D(arr, vmin=None, vmax=None, cmap=None):
     multi = max(arr.shape[0] // 512, 1)
