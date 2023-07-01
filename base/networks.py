@@ -250,14 +250,20 @@ class Random_Basis_Function_L(object):
         self.device = self.cfg.device
         self.basis_point,self.basis_time = self.generate_basis(self.num_spatial_basis,self.num_time_feature,self.time_length,self.dim)
         #self.band_width = cfg.band_width
-        self.spatial_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,self.dim),device=self.device)
-        self.time_A = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
-        self.bias = torch.randn((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
-        self.u_ = torch.nn.Parameter(torch.randn(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,device=self.device))
+        self.spatial_A = torch.rand((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,self.dim),device=self.device)
+        self.spatial_A = 2*(self.spatial_A-0.5)
+        self.time_A = torch.rand((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
+        self.time_A = 2*(self.time_A-0.5)
+        self.bias = torch.rand((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
+        self.bias = 2*(self.bias-0.5)
+        a = torch.rand(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,device=self.device)
+        a = 2*(a-0.5)
+        self.u_ = torch.nn.Parameter(a)
+
         self.idx_box = torch.linspace(0,self.num_spatial_basis*self.variable_num*self.num_per_point_feature-1,self.num_spatial_basis*self.variable_num*self.num_per_point_feature,device=self.device)
         self.idx_box = self.idx_box.reshape(self.num_spatial_basis,self.variable_num,self.num_per_point_feature)
         self.PoU = PoU
-        self.non_linear = nn.Sigmoid()
+        self.non_linear = nn.Tanh()
         self.tb = None
 
     def x_process(self,x,x_0,bandwidth):
@@ -271,10 +277,12 @@ class Random_Basis_Function_L(object):
 
     def generate_basis(self,pos_num,time_num,end_time,dim):
         resolution = int(math.pow(pos_num,1/dim))
+        self.band_width = 1/resolution
+        
         coords = torch.linspace(0.5, resolution - 0.5, resolution, device=self.device) / resolution * 2 - 1
         coords = torch.stack(torch.meshgrid([coords] * dim, indexing='ij'), dim=-1)
         coords = coords.reshape(resolution**dim, dim)
-        self.band_width = 2/resolution
+        
         length, dim = coords.shape
         self.num_spatial_basis = coords.shape[0]
         #print(self.num_spatial_basis)
@@ -444,7 +452,8 @@ class Random_Basis_Function_L(object):
         ot = ot * x_weight[...,None,None]
 
         u_current = torch.einsum('qhej,qhej->qe',ot,u_process)
-        L1 = divergence(u_current[:,:2], samples)
+        L1,_ = jacobian(u_current[:,:2], samples)
+        L1 = torch.einsum('qdd->q',L1)
         return u_current[:,:2], L1, backtracked_position 
         
     

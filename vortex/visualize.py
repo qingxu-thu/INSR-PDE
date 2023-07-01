@@ -25,7 +25,7 @@ def draw_vector_field2D(vel, coords):
     # ct = vt[:,None]*np.array([[0,0,1]])/np.max(vt)
     # print(ct.shape,vt)
     #print(np.max(vt),vt)
-    ax.scatter(x, y, c = vt,vmin=0,vmax=10)
+    ax.scatter(x, y, c = vt,vmin=0,vmax=8)
     ax.set_xlim(-1, 1)
     ax.set_ylim(-1, 1)
     fig.tight_layout()
