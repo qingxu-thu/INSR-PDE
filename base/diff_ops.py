@@ -83,7 +83,7 @@ def gradient(y, x, grad_outputs=None):
     return grad
 
 
-def jacobian(y: torch.FloatTensor, x: torch.FloatTensor):
+def jacobian(y: torch.FloatTensor, x: torch.FloatTensor, create_graph=True):
 
     """jacobian of y wrt x
 
@@ -98,7 +98,7 @@ def jacobian(y: torch.FloatTensor, x: torch.FloatTensor):
 
     for i in range(y.shape[-1]):
         y_i = y[..., i]
-        jac[..., i, :] = grad(y_i, x, torch.ones_like(y_i), create_graph=True)[0]
+        jac[..., i, :] = grad(y_i, x, torch.ones_like(y_i), create_graph=create_graph, retain_graph=True)[0]
 
     status = 0
     if torch.any(torch.isnan(jac)):

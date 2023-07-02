@@ -11,6 +11,7 @@ from base import gradient, divergence, laplace, jacobian
 # from torchsparsegradutils.utils import linear_cg, minres, rand_sparse, rand_sparse_tri
 from .sparse_solver import sparse_solve
 from scipy import sparse
+import math
 
 class Vortex(Random_Basis_Function):
     def  __init__(self,cfg):
@@ -165,7 +166,7 @@ class Vortex_L(Random_Basis_Function_L):
         self.num_process()
         self.optim = torch.optim.Adam([self.u_], lr = 0.1)
 
-    def process_boundary(self,N,epsilon=1e-4):
+    def process_boundary(self,N,epsilon=1e-16):
         boundary_ranges = [[[-1, 1], [-1 - epsilon, -1 + epsilon]],
                            [[-1, 1], [1 - epsilon, 1 + epsilon]],
                            [[1 - epsilon, 1 + epsilon], [-1, 1]],
@@ -176,8 +177,8 @@ class Vortex_L(Random_Basis_Function_L):
         for i,bound in enumerate(boundary_ranges):
             x_b, y_b = bound
             points = torch.empty(N // 4, 2).to(self.device)
-            points[:, 0] = torch.rand(N // 4) * (x_b[1] - x_b[0]) + x_b[0]
-            points[:, 1] = torch.rand(N // 4) * (y_b[1] - y_b[0]) + y_b[0]
+            points[:, 0] = torch.linspace(0,N // 4-1,N//4)/(N//4) * (x_b[1] - x_b[0]) + x_b[0]
+            points[:, 1] = torch.linspace(0,N // 4-1,N//4)/(N//4) * (y_b[1] - y_b[0]) + y_b[0]
             coords.append(points)
             Kp += points.shape[0]
             if i==0:
@@ -206,13 +207,34 @@ class Vortex_L(Random_Basis_Function_L):
 
         return spatial_pts,t,norm
 
-    def process_input(self):
+    def sample_input(self,num,epsilon = 1e-10):
         ####----collocation-pts----u_boundary---u_boundary_left---p_boundary----
-        grid_samples = sample_random(self.colloation_pts_num, 2, device=self.device).requires_grad_(True)
+        grid_samples = sample_uniform(num, 2, device=self.device).requires_grad_(True)
+        N = self.boundary_num
+        boundary_ranges = [[[-1, 1], [-1 - epsilon, -1 + epsilon]],
+                           [[-1, 1], [1 - epsilon, 1 + epsilon]],
+                           [[1 - epsilon, 1 + epsilon], [-1, 1]],
+                           [[-1 - epsilon, -1 + epsilon], [-1, 1]],
+                           ]
+        coords = []
+        for i,bound in enumerate(boundary_ranges):
+            x_b, y_b = bound
+            points = torch.empty(N // 4, 2).to(self.device)
+            points[:, 0] = torch.rand(N // 4) * (x_b[1] - x_b[0]) + x_b[0]
+            points[:, 1] = torch.rand(N // 4) * (y_b[1] - y_b[0]) + y_b[0]
+            coords.append(points)
+        boundary_samples = torch.cat(coords, dim=0)
+        total_samples = torch.cat([grid_samples,boundary_samples],dim=0).requires_grad_(True)
+        #total_samples = total_samples.unsqueeze(0).repeat(self.time_num,1,1)
+        return total_samples
+
+    def process_input(self):
+        grid_samples = sample_uniform(int(math.pow(self.colloation_pts_num,1/self.dim)), 2, device=self.device).requires_grad_(True)
         boundary_samples,norm = self.process_boundary(self.boundary_num)
         total_samples = torch.cat([grid_samples,boundary_samples],dim=0).requires_grad_(True)
         total_samples,t,norm = self.process_time(self.time_num,self.time_length,total_samples,norm)
-        return total_samples,t,norm
+        return total_samples,t,norm       
+
 
     def mse_loss(self,x,y):
         max_x = torch.abs(x).max()

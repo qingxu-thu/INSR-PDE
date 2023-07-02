@@ -21,11 +21,11 @@ def draw_vector_field2D(vel, coords):
 
     fig, ax = plt.subplots(figsize=(5, 5))
     #ax.quiver(x, y, u, v, scale=u.shape[0], scale_units='width')
-    vt = np.sqrt(v**2+u**2)
+    vt = u
     # ct = vt[:,None]*np.array([[0,0,1]])/np.max(vt)
     # print(ct.shape,vt)
     #print(np.max(vt),vt)
-    ax.scatter(x, y, c = vt,vmin=0,vmax=8)
+    ax.scatter(x, y, c = vt)
     ax.set_xlim(-1, 1)
     ax.set_ylim(-1, 1)
     fig.tight_layout()

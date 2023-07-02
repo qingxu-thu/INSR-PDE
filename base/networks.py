@@ -113,9 +113,10 @@ def t_process(t,t_0,bandwidth):
 def PoU(x):
     x_o = torch.zeros_like(x)
     #print(x)
-    x_o = torch.where(torch.logical_and(x>=(-5/4),(x<-3/4)),.5+torch.sin(2*torch.pi*x)/2,x_o)
-    x_o = torch.where(torch.logical_and(x>=(-3/4),(x<3/4)),1,x_o)
-    x_o = torch.where(torch.logical_and(x>=(3/4),(x<5/4)),.5-torch.sin(2*torch.pi*x)/2,x_o)
+    a = 1/200
+    x_o = torch.where(torch.logical_and(x>=(-(1+a)),(x<-(1-a))),.5+torch.sin(torch.pi/(4*a)*x)/2,x_o)
+    x_o = torch.where(torch.logical_and(x>=(-(1-a)),(x<(1-a))),1,x_o)
+    x_o = torch.where(torch.logical_and(x>=((1-a)),(x<(1+a))),.5-torch.sin(2*torch.pi/(4*a)*x)/2,x_o)
     # x_o = x_o[...,0] * x_o[...,1]
     return x_o 
 
@@ -251,17 +252,24 @@ class Random_Basis_Function_L(object):
         self.basis_point,self.basis_time = self.generate_basis(self.num_spatial_basis,self.num_time_feature,self.time_length,self.dim)
         #self.band_width = cfg.band_width
         self.spatial_A = torch.rand((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,self.dim),device=self.device)
-        self.spatial_A = 2*(self.spatial_A-0.5)
-        self.time_A = torch.rand((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
-        self.time_A = 2*(self.time_A-0.5)
+        self.spatial_A = self.band_width/3 * 2*(self.spatial_A-0.5)
+
+        self.low_basis_A = torch.rand((self.num_time_feature,self.variable_num,self.num_per_point_feature,self.dim),device=self.device)
+        self.low_basis_A = 2*(self.low_basis_A-0.5)/3
         self.bias = torch.rand((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
         self.bias = 2*(self.bias-0.5)
+        self.low_bias_A = torch.rand((self.num_time_feature,self.variable_num,self.num_per_point_feature),device=self.device)
+        self.low_bias_A = 2*(self.low_bias_A-0.5)
         a = torch.rand(self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,device=self.device)
         a = 2*(a-0.5)
         self.u_ = torch.nn.Parameter(a)
-
+        a = torch.rand(self.num_time_feature,self.variable_num,self.num_per_point_feature,device=self.device)
+        a = self.band_width * 2*(a-0.5)   
+        self.global_u_ =  torch.nn.Parameter(a)    
         self.idx_box = torch.linspace(0,self.num_spatial_basis*self.variable_num*self.num_per_point_feature-1,self.num_spatial_basis*self.variable_num*self.num_per_point_feature,device=self.device)
         self.idx_box = self.idx_box.reshape(self.num_spatial_basis,self.variable_num,self.num_per_point_feature)
+        self.global_idx_box = self.num_spatial_basis*self.variable_num*self.num_per_point_feature + torch.linspace(0,self.variable_num*self.num_per_point_feature-1,self.variable_num*self.num_per_point_feature,device=self.device)
+        self.global_idx_box = self.global_idx_box.reshape(self.variable_num,self.num_per_point_feature)
         self.PoU = PoU
         self.non_linear = nn.Tanh()
         self.tb = None
@@ -417,7 +425,7 @@ class Random_Basis_Function_L(object):
         return L1,L2,Lt,ot
     
     def semi_lagrangian_advection(self,samples,prev_u,time):
-        samples = samples[time].detach().requires_grad_(True)
+        samples = samples[time].clone().detach().requires_grad_(True)
         
         backtracked_position = samples - prev_u * self.cfg.dt
         #print(backtracked_position.shape,prev_u.shape)
@@ -454,7 +462,7 @@ class Random_Basis_Function_L(object):
         u_current = torch.einsum('qhej,qhej->qe',ot,u_process)
         L1,_ = jacobian(u_current[:,:2], samples)
         L1 = torch.einsum('qdd->q',L1)
-        return u_current[:,:2], L1, backtracked_position 
+        return prev_u[:,:2], L1, samples 
         
     
     def matrix_ids(self,x,t):
@@ -561,7 +569,7 @@ class Random_Basis_Function_L(object):
     def inference_time(self,x,t):
         # x_: Q * dim
         
-        x_,idx = self.neighbor_search_single(x[t].unsqueeze(0),t)
+        x_,idx = self.neighbor_search_single(x.unsqueeze(0),t)
         #print("idx",idx.shape)
         total_ = self.num_time_feature*self.num_spatial_basis
         h = idx.shape[1]
@@ -591,9 +599,13 @@ class Random_Basis_Function_L(object):
         x_weight = self.PoU(x_)
         x_weight = x_weight[...,0] * x_weight[...,1]
         ot = ot * x_weight[...,None,None]
+        
+        global_feature = self.non_linear(torch.einsum('ejd,qd->qej',self.low_basis_A[t],x) + self.low_bias_A[t,None,:,:])
+        global_feature = torch.einsum('qej,ej->qe',global_feature,self.global_u_[t])
 
 
         #print(ot,u_process)
         u_current = torch.einsum('qhej,qhej->qe',ot,u_process)
+        u_current = u_current+global_feature
         #print(ot.shape)
         return u_current[:,:2], u_current[:,2]
