@@ -167,18 +167,19 @@ class Vortex_L(Random_Basis_Function_L):
         self.optim = torch.optim.Adam([self.u_], lr = 0.1)
 
     def process_boundary(self,N,epsilon=1e-16):
-        boundary_ranges = [[[-1, 1], [-1 - epsilon, -1 + epsilon]],
-                           [[-1, 1], [1 - epsilon, 1 + epsilon]],
-                           [[1 - epsilon, 1 + epsilon], [-1, 1]],
-                           [[-1 - epsilon, -1 + epsilon], [-1, 1]],
+        boundary_ranges = [[[-1, 1], [-1 , -1]],
+                           [[-1, 1], [1 , 1]],
+                           [[1 , 1 ], [-1, 1]],
+                           [[-1 , -1 ], [-1, 1]],
                            ]
         coords = []
         Kp = 0
         for i,bound in enumerate(boundary_ranges):
             x_b, y_b = bound
             points = torch.empty(N // 4, 2).to(self.device)
-            points[:, 0] = torch.linspace(0,N // 4-1,N//4)/(N//4) * (x_b[1] - x_b[0]) + x_b[0]
-            points[:, 1] = torch.linspace(0,N // 4-1,N//4)/(N//4) * (y_b[1] - y_b[0]) + y_b[0]
+
+            points[:, 0] = torch.linspace(0.1,N // 4-0.1,N//4)/(N//4) * (x_b[1] - x_b[0]) + x_b[0]
+            points[:, 1] = torch.linspace(0.1,N // 4-0.1,N//4)/(N//4) * (y_b[1] - y_b[0]) + y_b[0]
             coords.append(points)
             Kp += points.shape[0]
             if i==0:

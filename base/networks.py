@@ -9,12 +9,17 @@ import math
 from .diff_ops import *
 
 
+from .hash_encoding import MultiResHashGrid
+
 def get_network(cfg, in_features, out_features):
     if cfg.network == 'siren':
         return MLP(in_features, out_features, cfg.num_hidden_layers,
             cfg.hidden_features, nonlinearity=cfg.nonlinearity)
+    elif cfg.network == 'hashgrid':
+        return MultiResHashGrid(in_features,out_features)
     else:
         raise NotImplementedError
+    
 
 
 ############################### SIREN ################################
@@ -113,7 +118,7 @@ def t_process(t,t_0,bandwidth):
 def PoU(x):
     x_o = torch.zeros_like(x)
     #print(x)
-    a = 1/200
+    a = 1/4
     x_o = torch.where(torch.logical_and(x>=(-(1+a)),(x<-(1-a))),.5+torch.sin(torch.pi/(4*a)*x)/2,x_o)
     x_o = torch.where(torch.logical_and(x>=(-(1-a)),(x<(1-a))),1,x_o)
     x_o = torch.where(torch.logical_and(x>=((1-a)),(x<(1+a))),.5-torch.sin(2*torch.pi/(4*a)*x)/2,x_o)
@@ -252,10 +257,10 @@ class Random_Basis_Function_L(object):
         self.basis_point,self.basis_time = self.generate_basis(self.num_spatial_basis,self.num_time_feature,self.time_length,self.dim)
         #self.band_width = cfg.band_width
         self.spatial_A = torch.rand((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature,self.dim),device=self.device)
-        self.spatial_A = self.band_width/3 * 2*(self.spatial_A-0.5)
+        self.spatial_A = self.band_width * 2*(self.spatial_A-0.5)
 
         self.low_basis_A = torch.rand((self.num_time_feature,self.variable_num,self.num_per_point_feature,self.dim),device=self.device)
-        self.low_basis_A = 2*(self.low_basis_A-0.5)/3
+        self.low_basis_A = 2*(self.low_basis_A-0.5)
         self.bias = torch.rand((self.num_time_feature,self.num_spatial_basis,self.variable_num,self.num_per_point_feature),device=self.device)
         self.bias = 2*(self.bias-0.5)
         self.low_bias_A = torch.rand((self.num_time_feature,self.variable_num,self.num_per_point_feature),device=self.device)
@@ -606,6 +611,6 @@ class Random_Basis_Function_L(object):
 
         #print(ot,u_process)
         u_current = torch.einsum('qhej,qhej->qe',ot,u_process)
-        u_current = u_current+global_feature
+        u_current = u_current
         #print(ot.shape)
         return u_current[:,:2], u_current[:,2]

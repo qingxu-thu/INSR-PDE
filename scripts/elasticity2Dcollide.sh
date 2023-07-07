@@ -18,4 +18,4 @@ python main.py elasticity \
     -f_ext_x 0 \
     -f_ext_y ' -2e2' \
     -T_ext 2 \
-    --early_stop
+    --early_stop 
