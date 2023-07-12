@@ -96,7 +96,7 @@ class _HashGrid(nn.Module):
 
         # create look-up table
         self.embedding = nn.Embedding(hashmap_size, n_features)
-        nn.init.uniform_(self.embedding.weight, a=-0.0001, b=0.0001)
+        nn.init.uniform_(self.embedding.weight, a=-0.01, b=0.01)
 
         primes = torch.tensor(PRIMES, dtype=torch.int64)
         self.register_buffer('primes', primes, persistent=False)
@@ -236,12 +236,8 @@ class MultiResHashGrid(nn.Module):
     def __init__(
         self,
         dim: int,
-        out_dim = int,
-        n_levels: int = 16,
-        n_features_per_level: int = 4,
-        log2_hashmap_size: int = 18,
-        base_resolution: int = 256,
-        finest_resolution: int = 4096,
+        out_dim: int, 
+        cfg
     ):
         """NVidia's hash grid encoding
         https://nvlabs.github.io/instant-ngp/
@@ -263,33 +259,41 @@ class MultiResHashGrid(nn.Module):
         """
         super().__init__()
         self.dim = dim
-        self.n_levels = n_levels
-        self.n_features_per_level = n_features_per_level
-        self.log2_hashmap_size = log2_hashmap_size
-        self.base_resolution = base_resolution
-        self.finest_resolution = finest_resolution
-
+        self.n_levels = cfg.n_levels
+        self.n_features_per_level = cfg.n_features_per_level
+        self.log2_hashmap_size = cfg.log2_hashmap_size
+        self.base_resolution = cfg.base_resolution
+        self.finest_resolution = cfg.finest_resolution
+        
         # from paper eq (3)
-        b = math.exp((math.log(finest_resolution) - math.log(base_resolution))/(base_resolution-1))
+        b = math.exp((math.log(self.finest_resolution) - math.log(self.base_resolution))/(self.base_resolution-1))
 
         levels = []
-        for level_idx in range(n_levels):
-            resolution = math.floor(base_resolution * (b ** level_idx))
-            hashmap_size = min(resolution ** dim, 2 ** log2_hashmap_size)
+        for level_idx in range(self.n_levels):
+            resolution = math.floor(self.base_resolution * (b ** level_idx))
+            hashmap_size = min(resolution ** dim, 2 ** self.log2_hashmap_size)
             levels.append(_HashGrid(
                 dim = dim,
-                n_features = n_features_per_level,
+                n_features = self.n_features_per_level,
                 hashmap_size = hashmap_size,
                 resolution = resolution
             ))
         self.levels = nn.ModuleList(levels)
 
         self.input_dim = dim
-        self.output_dim = n_levels * n_features_per_level
-        self.simple_mlp = Simple_MLP(self.output_dim, out_dim, [32])
+        self.output_dim = self.n_levels * self.n_features_per_level
+        print(cfg.mlp_units)
+        self.simple_mlp = Simple_MLP(self.output_dim, out_dim, cfg.mlp_units)
+        #self.simple_mlp.apply(init_weights_normal)
+    # def mlp_generate(self,variable_list):
+    #     self.simple_mlp = []
+    #     for i in variable_list:
+    #         self.simple_mlp.append(Simple_MLP(self.output_dim, i, [32]).to('cuda'))          
 
     def forward(self, x: torch.Tensor):
+        x = x/2 + 0.5
         a = torch.cat([level(x) for level in self.levels], dim=-1)
-        return self.simple_mlp(a)
+        
+        return self.simple_mlp(a) * 2
     
 

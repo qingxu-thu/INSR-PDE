@@ -1,8 +1,8 @@
 python main.py elasticity \
-    --tag elasticity2D_collide_hash_grid_3 \
+    --tag elasticity2D_collide_hash_grid_4 \
     --num_hidden_layers 3 \
     --hidden_features 68 \
-    -sr 1000 \
+    -sr 100 \
     -vr 100 \
     -T 7 \
     -g 1 \
@@ -20,9 +20,9 @@ python main.py elasticity \
     -T_ext 2 \
     --early_stop \
     --n_levels 8 \
-    --n_features_per_level 16 \
-    --log2_hashmap_size 18\
-    --base_resolution 256\
-    --finest_resolution 2048 \
+    --n_features_per_level 4 \
+    --log2_hashmap_size 16 \
+    --base_resolution 4 \
+    --finest_resolution 64 \
     --mlp_unit "[68]" \
     --network hashgrid

@@ -1,0 +1,17 @@
+python main.py fluid \
+    --tag fluid2d_tlgnM_hash2 \
+    --init_cond taylorgreen_multi \
+    --num_hidden_layers 3 \
+    --hidden_features 32 \
+    -sr 128 \
+    -vr 32 \
+    --dt 0.05 \
+    -T 20 \
+    -g 1 \
+    --n_levels 16 \
+    --n_features_per_level 4 \
+    --log2_hashmap_size 16 \
+    --base_resolution 4 \
+    --finest_resolution 128 \
+    --mlp_unit "[32,32]" \
+    --network hashgrid

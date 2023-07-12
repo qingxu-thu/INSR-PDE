@@ -96,7 +96,7 @@ class ElasticityModel(BaseModel):
     @property
     def _trainable_networks(self):
         return {'deformation': self.deformation_field}
-
+  
 
     @BaseModel._timestepping
     def initialize(self):
@@ -133,14 +133,15 @@ class ElasticityModel(BaseModel):
 
         with torch.no_grad():
             q_prev = self.deformation_field_prev(samples) + samples
-            q_prev_prev = self.deformation_field_prev_prev(samples) + samples               
+            q_prev_prev = self.deformation_field_prev_prev(samples) + samples                      
         q = self.deformation_field(samples) + samples
-        
+        #print("prev",q_prev[10],"prev_prev",q_prev_prev[10])
         qdot = (q - q_prev) / self.dt
         qdot_prev = (q_prev - q_prev_prev) / self.dt
         
-        # ARAP elasticity loss + kinematics loss + bc loss
+         # ARAP elasticity loss + kinematics loss + bc loss
         jac_x, _ = jacobian(q, samples) # (N, 2, 2)
+        print(jac_x[10])
         U_x, S_x, V_x = torch.svd(jac_x)
 
         E_arap = self.ratio_arap * torch.sum((S_x - 1.0) ** 2) 
@@ -151,6 +152,7 @@ class ElasticityModel(BaseModel):
         loss = 0
         # Energy for the elastodynamics equation
         for l in self.energy:
+            loss_prev = loss
             if l == 'arap':
                 loss = loss + E_arap
             elif l == 'volume':
@@ -184,7 +186,7 @@ class ElasticityModel(BaseModel):
                 loss = loss + E_collide_sphere
             else:
                 raise NotImplementedError
-
+            print(l,loss-loss_prev)
         loss_dict = {'main': loss}
         return loss_dict
 

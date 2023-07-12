@@ -56,7 +56,10 @@ class BaseModel(ABC):
         """create optimizer and scheduler"""
         param_list = []
         for net in self._trainable_networks.values():
+            #print(net.levels.parameters())
             param_list.append({"params": net.parameters(), "lr": self.cfg.lr})
+            # param_list.append({"params": net.levels.parameters(), "lr": 1e-5})
+            # param_list.append({"params": net.simple_mlp.parameters(), "lr": 1e-5})
         self.optimizer = torch.optim.Adam(param_list)
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, factor=gamma, 
             min_lr=min_lr, patience=patience, verbose=True) if use_scheduler else None

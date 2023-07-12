@@ -1,10 +1,10 @@
 python main.py elasticity \
-    --tag elasticity2D_collide \
+    --tag elasticity2D_collide_2 \
     --num_hidden_layers 3 \
     --hidden_features 68 \
     -sr 100 \
     -vr 100 \
-    -T 20 \
+    -T 2 \
     -g 1 \
     --dt 0.1 \
     --max_n_iter 20000 \

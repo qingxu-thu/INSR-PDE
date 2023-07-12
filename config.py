@@ -2,7 +2,7 @@ import os
 import argparse
 import json
 import shutil
-
+import json
 
 class Config(object):
     """Base class of Config, provide necessary hyperparameters. 
@@ -67,6 +67,7 @@ class Config(object):
             self._add_network_config_(parent_parser)
             self._add_training_config_(parent_parser)
             self._add_timestep_config_(parent_parser)
+            self._add_hash_config_(parent_parser)
         else:
             self._add_recap_config_(parent_parser)
         
@@ -80,6 +81,7 @@ class Config(object):
             self._add_fluid_config_(parser_flu)
             self._add_elasticity_config_(parser_ela)
 
+
         args = parser.parse_args()
         return parser, args
 
@@ -90,6 +92,16 @@ class Config(object):
             help="path to project folder where models and logs will be saved")
         group.add_argument('--tag', type=str, default="run", help="name of this experiment")
         group.add_argument('-g', '--gpu_ids', type=str, default=0, help="gpu to use, e.g. 0  0,1,2. CPU not supported.")
+
+    def _add_hash_config_(self, parser):
+        """add hyperparameters for network architecture"""
+        group = parser.add_argument_group('hash_grid')
+        group.add_argument('--n_levels',type=int, default=16)
+        group.add_argument('--n_features_per_level', type=int, default=2)
+        group.add_argument('--log2_hashmap_size', type=int, default=16)
+        group.add_argument('--base_resolution',type=int, default=64)
+        group.add_argument('--finest_resolution',type=int, default=2048)
+        group.add_argument('--mlp_units',type=json.loads, default="[32]")
 
     def _add_network_config_(self, parser):
         """add hyperparameters for network architecture"""

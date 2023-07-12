@@ -16,7 +16,7 @@ def get_network(cfg, in_features, out_features):
         return MLP(in_features, out_features, cfg.num_hidden_layers,
             cfg.hidden_features, nonlinearity=cfg.nonlinearity)
     elif cfg.network == 'hashgrid':
-        return MultiResHashGrid(in_features,out_features)
+        return MultiResHashGrid(in_features,out_features,cfg)
     else:
         raise NotImplementedError
     

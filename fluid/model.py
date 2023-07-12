@@ -108,8 +108,37 @@ class Fluid2DModel(BaseModel):
         out_u = self.velocity_field(samples)
         div_u = divergence(out_u, samples).detach()
         out_p = self.pressure_field(samples)
-        lap_p = laplace(out_p, samples)
-
+        if self.cfg.network=='hashgrid':
+            samples_x = samples.clone()
+            samples_y = samples.clone()
+            #samples_z = samples.clone()
+            samples_x[:,0] += 1/self.sample_resolution
+            samples_y[:,1] += 1/self.sample_resolution
+            #samples_z[:,2] += 1/self.sample_resolution
+            out_p_x = self.pressure_field(samples_x)
+            out_p_y = self.pressure_field(samples_y)
+            #out_p_z = self.pressure_field(samples_z)
+            g_x,_ = jacobian(out_p_x,samples_x)
+            g_y,_ = jacobian(out_p_y,samples_y)
+            #g_z,_ = jacobian(out_p_z,samples_z)
+            samples_x_ = samples.clone()
+            samples_y_ = samples.clone()
+            #samples_z_ = samples.clone()
+            samples_x_[:,0] -= 1/self.sample_resolution
+            samples_y_[:,1] -= 1/self.sample_resolution
+            #samples_z_[:,2] -= 1/self.sample_resolution
+            out_p_x_ = self.pressure_field(samples_x_)
+            out_p_y_ = self.pressure_field(samples_y_)
+            #out_p_z_ = self.pressure_field(samples_z_)
+            g_x_,_ = jacobian(out_p_x_,samples_x_)
+            g_y_,_ = jacobian(out_p_y_,samples_y_)
+            #g_z_,_ = jacobian(out_p_z_,samples_z_)
+            lap_p = (g_x-g_x_)/(2*1/self.sample_resolution) + (g_y-g_y_)/(2*1/self.sample_resolution)
+            print(lap_p[10])
+        else:
+            lap_p = laplace(out_p, samples)
+            print(div_u[10])
+        
         loss = torch.mean((div_u - lap_p) ** 2) # FIXME: assume rho=1 here
         loss_dict = {'main': loss}
 
