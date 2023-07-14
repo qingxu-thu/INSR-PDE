@@ -28,7 +28,8 @@ class Fluid2DModel(BaseModel):
     def sample_field(self, resolution, return_samples=False):
         """sample current field with uniform grid points"""
         grid_samples = sample_uniform(resolution, 2, device=self.device, flatten=False).requires_grad_(True)
-        out = self.velocity_field(grid_samples)
+        grid_samples_t = grid_samples.reshape(-1,2)
+        out = self.velocity_field(grid_samples_t).reshape(resolution,resolution,-1)
         if return_samples:
             return out, grid_samples
         return out
@@ -44,6 +45,7 @@ class Fluid2DModel(BaseModel):
         """forward computation for initialization"""
         samples = self._sample_in_training()
         ref = self.init_cond_func(samples)
+        #print("samples",samples.shape)
         out = self.velocity_field(samples)
         loss_random = F.mse_loss(out, ref)
 
@@ -108,36 +110,37 @@ class Fluid2DModel(BaseModel):
         out_u = self.velocity_field(samples)
         div_u = divergence(out_u, samples).detach()
         out_p = self.pressure_field(samples)
-        if self.cfg.network=='hashgrid':
-            samples_x = samples.clone()
-            samples_y = samples.clone()
-            #samples_z = samples.clone()
-            samples_x[:,0] += 1/self.sample_resolution
-            samples_y[:,1] += 1/self.sample_resolution
-            #samples_z[:,2] += 1/self.sample_resolution
-            out_p_x = self.pressure_field(samples_x)
-            out_p_y = self.pressure_field(samples_y)
-            #out_p_z = self.pressure_field(samples_z)
-            g_x,_ = jacobian(out_p_x,samples_x)
-            g_y,_ = jacobian(out_p_y,samples_y)
-            #g_z,_ = jacobian(out_p_z,samples_z)
-            samples_x_ = samples.clone()
-            samples_y_ = samples.clone()
-            #samples_z_ = samples.clone()
-            samples_x_[:,0] -= 1/self.sample_resolution
-            samples_y_[:,1] -= 1/self.sample_resolution
-            #samples_z_[:,2] -= 1/self.sample_resolution
-            out_p_x_ = self.pressure_field(samples_x_)
-            out_p_y_ = self.pressure_field(samples_y_)
-            #out_p_z_ = self.pressure_field(samples_z_)
-            g_x_,_ = jacobian(out_p_x_,samples_x_)
-            g_y_,_ = jacobian(out_p_y_,samples_y_)
-            #g_z_,_ = jacobian(out_p_z_,samples_z_)
-            lap_p = (g_x-g_x_)/(2*1/self.sample_resolution) + (g_y-g_y_)/(2*1/self.sample_resolution)
-            print(lap_p[10])
-        else:
-            lap_p = laplace(out_p, samples)
-            print(div_u[10])
+        # if self.cfg.network=='hashgrid':
+        #     samples_x = samples.clone()
+        #     samples_y = samples.clone()
+        #     #samples_z = samples.clone()
+        #     samples_x[:,0] += 1/self.sample_resolution
+        #     samples_y[:,1] += 1/self.sample_resolution
+        #     #samples_z[:,2] += 1/self.sample_resolution
+        #     out_p_x = self.pressure_field(samples_x)
+        #     out_p_y = self.pressure_field(samples_y)
+        #     #out_p_z = self.pressure_field(samples_z)
+        #     g_x,_ = jacobian(out_p_x,samples_x)
+        #     g_y,_ = jacobian(out_p_y,samples_y)
+        #     #g_z,_ = jacobian(out_p_z,samples_z)
+        #     samples_x_ = samples.clone()
+        #     samples_y_ = samples.clone()
+        #     #samples_z_ = samples.clone()
+        #     samples_x_[:,0] -= 1/self.sample_resolution
+        #     samples_y_[:,1] -= 1/self.sample_resolution
+        #     #samples_z_[:,2] -= 1/self.sample_resolution
+        #     out_p_x_ = self.pressure_field(samples_x_)
+        #     out_p_y_ = self.pressure_field(samples_y_)
+        #     #out_p_z_ = self.pressure_field(samples_z_)
+        #     g_x_,_ = jacobian(out_p_x_,samples_x_)
+        #     g_y_,_ = jacobian(out_p_y_,samples_y_)
+        #     #g_z_,_ = jacobian(out_p_z_,samples_z_)
+        #     print(g_x_.shape)
+        #     lap_p = (g_x[:,0,0]-g_x_[:,0,0])/(2*1/self.sample_resolution) + (g_y[:,0,1]-g_y_[:,0,1])/(2*1/self.sample_resolution)
+        #     print(lap_p[10])
+        # else:
+        lap_p = laplace(out_p, samples)
+        print(div_u[10])
         
         loss = torch.mean((div_u - lap_p) ** 2) # FIXME: assume rho=1 here
         loss_dict = {'main': loss}
@@ -163,7 +166,7 @@ class Fluid2DModel(BaseModel):
         
         p = self.pressure_field(samples)
         grad_p = gradient(p, samples).detach()
-
+        print(grad_p[10])
         target_u = prev_u - grad_p
         curr_u = self.velocity_field(samples)
         loss = torch.mean((curr_u - target_u) ** 2)
@@ -183,13 +186,13 @@ class Fluid2DModel(BaseModel):
         """visualization on tb during training"""
         curr_u_grid, grid_samples = self.sample_field(self.vis_resolution, return_samples=True)
         with torch.no_grad():
-            prev_u_grid = self.velocity_field_prev(grid_samples).detach()
+            prev_u_grid = self.velocity_field_prev(grid_samples.reshape(-1,2)).detach().reshape(self.vis_resolution,self.vis_resolution,-1)
 
         backtracked_position = grid_samples - prev_u_grid * self.cfg.dt
         backtracked_position = torch.clamp(backtracked_position, min=-1.0, max=1.0)
         
         with torch.no_grad():
-            advected_u = self.velocity_field_prev(backtracked_position).detach()
+            advected_u = self.velocity_field_prev(backtracked_position.reshape(-1,2)).detach().reshape(self.vis_resolution,self.vis_resolution,-1)
 
         mse = torch.mean((curr_u_grid - advected_u) ** 2, dim=-1).detach().cpu().numpy()
         curr_u_grid = curr_u_grid.detach().cpu().numpy()
@@ -201,7 +204,7 @@ class Fluid2DModel(BaseModel):
         """visualization on tb during training"""
         out_u, grid_samples = self.sample_field(self.vis_resolution, return_samples=True)
         div_u = divergence(out_u, grid_samples).detach()
-        out_p = self.pressure_field(grid_samples)
+        out_p = self.pressure_field(grid_samples.reshape(-1,2)).reshape(self.vis_resolution,self.vis_resolution,-1)
         lap_p = laplace(out_p, grid_samples)
         grad_p = gradient(out_p, grid_samples)
         mse = (div_u - lap_p) ** 2
@@ -218,8 +221,8 @@ class Fluid2DModel(BaseModel):
         curr_u, grid_samples = self.sample_field(self.vis_resolution, return_samples=True)
 
         with torch.no_grad():
-            prev_u = self.velocity_field_prev(grid_samples).detach()
-        p = self.pressure_field(grid_samples)
+            prev_u = self.velocity_field_prev(grid_samples.reshape(-1,2)).detach().reshape(self.vis_resolution,self.vis_resolution,-1)
+        p = self.pressure_field(grid_samples.reshape(-1,2)).reshape(self.vis_resolution,self.vis_resolution,-1)
         grad_p = gradient(p, grid_samples).detach()
         target_u = prev_u - grad_p
         mse = torch.sum((curr_u - target_u) ** 2, dim=-1).detach().cpu().numpy()

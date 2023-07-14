@@ -141,9 +141,29 @@ class ElasticityModel(BaseModel):
         
          # ARAP elasticity loss + kinematics loss + bc loss
         jac_x, _ = jacobian(q, samples) # (N, 2, 2)
-        print(jac_x[10])
-        U_x, S_x, V_x = torch.svd(jac_x)
+        print(jac_x[404])
+        
+        # if self.cfg.network=='hashgrid':
+        #     samples_x = samples.clone()
+        #     samples_y = samples.clone()
+        #     #samples_z = samples.clone()
+        #     samples_x[:,0] += 1/self.sample_resolution
+        #     samples_y[:,1] += 1/self.sample_resolution
+        #     q_x = self.deformation_field(samples_x) + samples
+        #     q_y = self.deformation_field(samples_y) + samples
+        #     #samples_z[:,2] += 1/self.sample_resolution
+        #     samples_x_ = samples.clone()
+        #     samples_y_ = samples.clone()
+        #     #samples_z = samples.clone()
+        #     samples_x_[:,0] -= 1/self.sample_resolution
+        #     samples_y_[:,1] -= 1/self.sample_resolution
+        #     q_x_ = self.deformation_field(samples_x_) + samples
+        #     q_y_ = self.deformation_field(samples_y_) + samples
+        #     jac_x = torch.stack([(q_x-q_x_)/(2*1/self.sample_resolution) , (q_y-q_y_)/(2*1/self.sample_resolution)],dim=-1)
 
+        
+        U_x, S_x, V_x = torch.svd(jac_x)
+        
         E_arap = self.ratio_arap * torch.sum((S_x - 1.0) ** 2) 
         E_volume = self.ratio_volume * torch.sum((torch.prod(S_x, dim=1) - 1) ** 2) 
         E_kinematics = self.ratio_kinematics * torch.sum((qdot - qdot_prev) ** 2)

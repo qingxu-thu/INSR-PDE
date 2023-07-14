@@ -1,5 +1,5 @@
 python main.py elasticity \
-    --tag elasticity2D_collide_hash_grid_4 \
+    --tag elasticity2D_collide_hash_grid_5 \
     --num_hidden_layers 3 \
     --hidden_features 68 \
     -sr 100 \
@@ -7,7 +7,7 @@ python main.py elasticity \
     -T 7 \
     -g 1 \
     --dt 0.1 \
-    --max_n_iter 20000 \
+    --max_n_iter 30000 \
     --lr 1e-5 \
     --dim 2 \
     --energy 'arap' 'kinematics' 'collision_sphere' 'external' 'volume' \
@@ -22,7 +22,7 @@ python main.py elasticity \
     --n_levels 8 \
     --n_features_per_level 4 \
     --log2_hashmap_size 16 \
-    --base_resolution 4 \
-    --finest_resolution 64 \
+    --base_resolution 8 \
+    --finest_resolution 128 \
     --mlp_unit "[68]" \
     --network hashgrid

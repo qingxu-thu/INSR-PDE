@@ -1,7 +1,7 @@
 import os
 from config import Config
 import torch
-print(torch.cuda.is_available())
+print(torch.cuda.is_available(),torch.cuda.device_count())
 # create experiment config containing all hyperparameters
 cfg = Config("train")
 

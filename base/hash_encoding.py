@@ -266,11 +266,12 @@ class MultiResHashGrid(nn.Module):
         self.finest_resolution = cfg.finest_resolution
         
         # from paper eq (3)
-        b = math.exp((math.log(self.finest_resolution) - math.log(self.base_resolution))/(self.base_resolution-1))
-
+        b = math.exp((math.log(self.finest_resolution) - math.log(self.base_resolution))/(self.n_levels-1))
+        print(b)
         levels = []
         for level_idx in range(self.n_levels):
             resolution = math.floor(self.base_resolution * (b ** level_idx))
+            print("resolution",resolution)
             hashmap_size = min(resolution ** dim, 2 ** self.log2_hashmap_size)
             levels.append(_HashGrid(
                 dim = dim,
@@ -294,6 +295,7 @@ class MultiResHashGrid(nn.Module):
         x = x/2 + 0.5
         a = torch.cat([level(x) for level in self.levels], dim=-1)
         
-        return self.simple_mlp(a) * 2
+        return self.simple_mlp(a)
     
+
 

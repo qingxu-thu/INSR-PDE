@@ -91,7 +91,7 @@ class Config(object):
         group.add_argument('--proj_dir', type=str, default="checkpoints", 
             help="path to project folder where models and logs will be saved")
         group.add_argument('--tag', type=str, default="run", help="name of this experiment")
-        group.add_argument('-g', '--gpu_ids', type=str, default=0, help="gpu to use, e.g. 0  0,1,2. CPU not supported.")
+        group.add_argument('-g', '--gpu_ids', type=str, default=1, help="gpu to use, e.g. 0  0,1,2. CPU not supported.")
 
     def _add_hash_config_(self, parser):
         """add hyperparameters for network architecture"""

@@ -1,0 +1,5 @@
+# ninja log v5
+0	11817	1689219181791307000	/media/qingxu/新加卷/pde_proj/INSR-PDE/base/gridencoder/build/temp.linux-x86_64-cpython-39/media/qingxu/新加卷/pde_proj/INSR-PDE/base/gridencoder/src/bindings.o	9ada75d68b3ff639
+0	108294	1689219278260571900	/media/qingxu/新加卷/pde_proj/INSR-PDE/base/gridencoder/build/temp.linux-x86_64-cpython-39/media/qingxu/新加卷/pde_proj/INSR-PDE/base/gridencoder/src/gridencoder.o	685e30ded9ae692c
+8	10229	1689221942149371400	/media/qingxu/新加卷/pde_proj/INSR-PDE/base/gridencoder/build/temp.linux-x86_64-cpython-39/media/qingxu/新加卷/pde_proj/INSR-PDE/base/gridencoder/src/bindings.o	9f28483803945354
+8	100300	1689222032212843800	/media/qingxu/新加卷/pde_proj/INSR-PDE/base/gridencoder/build/temp.linux-x86_64-cpython-39/media/qingxu/新加卷/pde_proj/INSR-PDE/base/gridencoder/src/gridencoder.o	9567f31774af8e3e

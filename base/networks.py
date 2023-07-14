@@ -9,7 +9,7 @@ import math
 from .diff_ops import *
 
 
-from .hash_encoding import MultiResHashGrid
+from .ahash_encoding import MultiResHashGrid
 
 def get_network(cfg, in_features, out_features):
     if cfg.network == 'siren':
@@ -70,6 +70,7 @@ class MLP(nn.Module):
             self.net[0].apply(first_layer_init)
 
     def forward(self, coords, weights=None):
+        print(coords.shape)
         output = self.net(coords)
         if weights is not None:
             output = output * weights
