@@ -5,7 +5,6 @@ python main.py fluid \
     --hidden_features 32 \
     -sr 128 \
     -vr 32 \
-    --max_n_iter 100 \
     --dt 0.05 \
     -T 100 \
     -g 0
