@@ -105,3 +105,13 @@ def jacobian(y: torch.FloatTensor, x: torch.FloatTensor, create_graph=True):
         status = -1
 
     return jac, status
+
+def curl(y, x):
+    div = -grad(
+        y[..., 0], x, torch.ones_like(y[..., 0]),
+        create_graph=True)[0][..., 1]
+    print(div)
+    div += grad(
+        y[..., 1], x, torch.ones_like(y[..., 1]),
+        create_graph=True)[0][..., 0]
+    return div

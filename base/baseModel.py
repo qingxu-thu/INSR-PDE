@@ -52,7 +52,7 @@ class BaseModel(ABC):
         """write visulized/discrete output"""
         pass
 
-    def _reset_optimizer(self, use_scheduler=True, gamma=0.1, patience=500, min_lr=1e-8):
+    def _reset_optimizer(self, use_scheduler=True, gamma=0.1, patience=1000, min_lr=1e-10):
         """create optimizer and scheduler"""
         param_list = []
         for net in self._trainable_networks.values():
@@ -61,8 +61,12 @@ class BaseModel(ABC):
             # param_list.append({"params": net.levels.parameters(), "lr": 1e-5})
             # param_list.append({"params": net.simple_mlp.parameters(), "lr": 1e-5})
         self.optimizer = torch.optim.Adam(param_list)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, factor=gamma, 
-            min_lr=min_lr, patience=patience, verbose=True) if use_scheduler else None
+        expo_gamma = 0.0001 ** (1 / self.cfg.max_n_iters)
+        if self.cfg.optim_type == "exp":
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=expo_gamma)
+        elif self.cfg.optim_type == "plateau":
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, factor=gamma, 
+                min_lr=min_lr, patience=patience, verbose=True) if use_scheduler else None
 
     def _create_tb(self, name, overwrite=True):
         """create tensorboard log"""
@@ -81,7 +85,10 @@ class BaseModel(ABC):
 
         self.optimizer.step()
         if self.scheduler is not None:
-            self.scheduler.step(loss_dict['main'])
+            if self.cfg.optim_type == "exp":
+                self.scheduler.step()
+            elif self.cfg.optim_type == "plateau":
+                self.scheduler.step(loss_dict["main"])
 
     def _set_require_grads(self, model, require_grad):
         for p in model.parameters():

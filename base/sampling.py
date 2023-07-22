@@ -44,6 +44,12 @@ def sample_boundary(N, sdim, epsilon=1e-4, device='cpu'):
 
 def sample_boundary2D_separate(N, side, epsilon=1e-4, device='cpu'):
     """sample boundary points within a small range. NOTE: random samples, not uniform"""
+    # if side == 'horizontal':
+    #     boundary_ranges = [[[-1, -1 + epsilon], [-1, 1]],
+    #                         [[1 - epsilon, 1], [-1, 1]],]
+    # elif side == 'vertical':
+    #     boundary_ranges = [[[-1, 1], [-1, -1 + epsilon]],
+    #                         [[-1, 1], [1-epsilon, 1 ]],]
     if side == 'horizontal':
         boundary_ranges = [[[-1 - epsilon, -1 + epsilon], [-1, 1]],
                             [[1 - epsilon, 1 + epsilon], [-1, 1]],]

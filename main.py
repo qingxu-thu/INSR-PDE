@@ -10,6 +10,8 @@ if cfg.pde == "advection":
     from advection import Advection1DModel as neuralModel
 elif cfg.pde == "fluid":
     from fluid import Fluid2DModel as neuralModel
+elif cfg.pde == "flow_fluid":
+    from flow_fluid import FlowFluid2DModel as neuralModel
 elif cfg.pde == "elasticity":
     from elasticity import ElasticityModel as neuralModel
 else:

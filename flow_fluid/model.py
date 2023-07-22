@@ -3,12 +3,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from base import BaseModel, sample_random, sample_uniform, sample_boundary2D_separate
+from .sampling_utils import sample_boundary2D_separate_list, sample_sdf, pts_proj, sampling_sdf_field
 from base import gradient, divergence, laplace, jacobian
 from .examples import get_examples
 from .visualize import draw_vector_field2D, draw_scalar_field2D, draw_curl, draw_magnitude, save_numpy_img, save_figure
 import copy
 
-class Fluid2DModel(BaseModel):
+class FlowFluid2DModel(BaseModel):
     """inviscid Navier-Stokes equation. 2D fluid. [-1, 1]^2."""
     def __init__(self, cfg):
         super().__init__(cfg)
@@ -18,24 +19,29 @@ class Fluid2DModel(BaseModel):
         if cfg.inner_sine == 1:
             cfg.network = 'siren'
             self.pressure_field = self._create_network(2, 1)
-            #self.pressure_field.reset_scale_factor(1000)
             cfg.network = 'hashgrid'
         else:
             self.pressure_field = self._create_network(2, 1)
         self._set_require_grads(self.velocity_field_prev, False)
         #self.b = np.exp((np.log(self.cfg.finest_resolution*2) - np.log(self.cfg.finest_resolution)) / (self.cfg.max_n_iters))
+        
         self._init_pressure = copy.deepcopy(self.pressure_field.state_dict())
+        
+        self.r = 0.2
+        self.shift = torch.Tensor([-0.4,0.0]).to(self.device)
+        self.init_entrance = self.cfg.ent_v
         
     @property
     def _trainable_networks(self):
         return {'velocity': self.velocity_field, 'pressure': self.pressure_field}
     
     def _sample_in_training(self):
-        return sample_random(self.sample_resolution ** 2, 2, device=self.device).requires_grad_(True)
+        return sampling_sdf_field(self.sample_resolution ** 2, 2, self.device,self.r,self.shift).requires_grad_(True)
 
     def sample_field(self, resolution, return_samples=False):
         """sample current field with uniform grid points"""
         grid_samples = sample_uniform(resolution, 2, device=self.device, flatten=False).requires_grad_(True)
+        #grid_samples = pts_proj(grid_samples,self.r,self.shift).requires_grad_(True)
         grid_samples_t = grid_samples.reshape(-1,2)
         out = self.velocity_field(grid_samples_t).reshape(resolution,resolution,-1)
         if return_samples:
@@ -52,21 +58,19 @@ class Fluid2DModel(BaseModel):
     def _initialize(self):
         """forward computation for initialization"""
         samples = self._sample_in_training()
-        ref = self.init_cond_func(samples)
-        #print("samples",samples.shape)
+        ref = self.init_cond_func(samples,self.cfg.finest_resolution, self.init_entrance,10)
+        #print("samples",torch.any(ref>0))
         out = self.velocity_field(samples)
         loss_random = F.mse_loss(out, ref)
 
         loss_dict = {'main': loss_random}
         
-        # bc_sample_x = sample_boundary2D_separate(samples.shape[0] // 10,epsilon=2/self.cfg.finest_resolution, side='horizontal', device=self.device).requires_grad_(True)
-        # bc_sample_y = sample_boundary2D_separate(samples.shape[0] // 10,epsilon=2/self.cfg.finest_resolution, side='vertical', device=self.device).requires_grad_(True)
-        # vel_x = self.velocity_field(bc_sample_x)
-        # vel_y = self.velocity_field(bc_sample_y)
-        # ref_x = self.init_cond_func(bc_sample_x)
-        # ref_y = self.init_cond_func(bc_sample_y)
-        # bc_loss = F.mse_loss(vel_x, ref_x) + F.mse_loss(vel_y, ref_y)
-        # loss_dict.update({"bc": bc_loss})
+        bc_sample_x = sample_boundary2D_separate_list(samples.shape[0] // 100, side=[2,3], device=self.device).requires_grad_(True)
+        bc_sample_y = sample_boundary2D_separate_list(samples.shape[0] // 100, side=[0], device=self.device).requires_grad_(True)
+        vel_x = self.velocity_field(bc_sample_x)[..., 1]
+        vel_y = self.velocity_field(bc_sample_y)[..., 0]
+        bc_loss = (torch.mean(vel_x ** 2) + torch.mean((vel_y-self.init_entrance) ** 2)) * 1.0
+        loss_dict.update({"bc": bc_loss})
         
         return loss_dict
     
@@ -83,8 +87,7 @@ class Fluid2DModel(BaseModel):
         """operater splitting scheme"""
         self.velocity_field_prev.load_state_dict(self.velocity_field.state_dict())
         self._advect_velocity()
-        #self.rec = self.cfg.finest_resolution
-        #self.pressure_field.load_state_dict(self._init_pressure)
+
         self._solve_pressure()
 
         self.velocity_field_prev.load_state_dict(self.velocity_field.state_dict())
@@ -103,6 +106,7 @@ class Fluid2DModel(BaseModel):
         # backtracking
         backtracked_position = samples - prev_u * self.cfg.dt
         backtracked_position = torch.clamp(backtracked_position, min=-1.0, max=1.0)
+        #backtracked_position = pts_proj(backtracked_position,self.r,self.shift)
         
         with torch.no_grad():
             advected_u = self.velocity_field_prev(backtracked_position).detach()
@@ -112,14 +116,16 @@ class Fluid2DModel(BaseModel):
 
         # FIXME: hard-coded zero boundary condition to sample 1% points near boundary
         #        and fixed factor 1.0 for boundary loss
-        # epsilon = 1e-2
-        bc_sample_x = sample_boundary2D_separate(samples.shape[0] // 100, side='horizontal', device=self.device).requires_grad_(True)
-        bc_sample_y = sample_boundary2D_separate(samples.shape[0] // 100, side='vertical', device=self.device).requires_grad_(True)
-        bc_sample_x = torch.clamp(bc_sample_x, min=-1.0, max=1.0)
-        bc_sample_y = torch.clamp(bc_sample_y, min=-1.0, max=1.0)
-        vel_x = self.velocity_field(bc_sample_x)[..., 0]
-        vel_y = self.velocity_field(bc_sample_y)[..., 1]
-        bc_loss = (torch.mean(vel_x ** 2) + torch.mean(vel_y ** 2)) * 1.0
+        bc_sample_x = sample_boundary2D_separate_list(samples.shape[0] // 100, side=[2,3], device=self.device).requires_grad_(True)
+        bc_sample_y = sample_boundary2D_separate_list(samples.shape[0] // 100, side=[0], device=self.device).requires_grad_(True)
+        vel_x = self.velocity_field(bc_sample_x)[..., 1]
+        vel_y = self.velocity_field(bc_sample_y)[..., 0]
+        bc_sdf_sample,sample_norm = sample_sdf(samples.shape[0] // 100,self.r,self.shift,device=self.device)
+        bc_sdf_sample = bc_sdf_sample.requires_grad_(True)
+        vel_sdf = self.velocity_field(bc_sdf_sample)
+        norm_dot = torch.sum(vel_sdf * sample_norm,-1) 
+        print(vel_sdf.shape,sample_norm.shape)
+        bc_loss = (torch.mean(vel_x ** 2) + torch.mean((vel_y-self.init_entrance) ** 2)) * 1.0
         loss_dict.update({"bc": bc_loss})
 
         return loss_dict
@@ -131,23 +137,6 @@ class Fluid2DModel(BaseModel):
 
         out_u = self.velocity_field(samples)
         div_u = divergence(out_u, samples).detach()
-        
-        # rec = self.cfg.finest_resolution * 2
-        # if self.cfg.network=='hashgrid':
-        #     vsamples_x = samples.clone()
-        #     vsamples_y = samples.clone()
-        #     vsamples_x[:,0] += 1/rec
-        #     vsamples_y[:,1] += 1/rec
-        #     vout_u_x = self.velocity_field(vsamples_x)
-        #     vout_u_y = self.velocity_field(vsamples_y)
-        #     vsamples_x_ = samples.clone()
-        #     vsamples_y_ = samples.clone()
-        #     vsamples_x_[:,0] -= 1/rec
-        #     vsamples_y_[:,1] -= 1/rec
-        #     vout_u_x_ = self.velocity_field(vsamples_x_)
-        #     vout_u_y_ = self.velocity_field(vsamples_y_)
-        #     div_u = (vout_u_x_[:,0]-vout_u_x[:,0])/(2/rec) + (vout_u_y_[:,1]-vout_u_y[:,1])/(2/rec)
-        # div_u = div_u.detach()
         out_p = self.pressure_field(samples)
         #self.rec = self.rec * self.b
         #print("rec",self.rec)
@@ -157,14 +146,21 @@ class Fluid2DModel(BaseModel):
             samples_y = samples.clone()
             samples_x[:,0] += 1/rec
             samples_y[:,1] += 1/rec
-            # mask1 = torch.where(torch.logical_and(samples_x[:,0]<1,samples_x[:,0]>-1),0,1).detach()
-            # mask2 = torch.where(torch.logical_and(samples_y[:,1]<1,samples_y[:,1]>-1),0,1).detach()
+            
+            # mask1 = torch.where(torch.logical_and(samples_x[:,0]<1,samples_x[:,0]>-1),0,1).detach().bool()
+            # mask2 = torch.where(torch.logical_and(samples_y[:,1]<1,samples_y[:,1]>-1),0,1).detach().bool()
+            mask_right_1 = torch.where(samples_x[:,0]>=1,1,0).detach().bool()
             samples_x = torch.clamp(samples_x, min=-1.0, max=1.0)
             samples_y = torch.clamp(samples_y, min=-1.0, max=1.0)
+            #mask1 = mask1 | torch.where(torch.sqrt(torch.sum((samples_x-self.shift)**2, axis=-1)) -self.r > 0,0,1).detach().bool()
+            #mask2 = mask2 | torch.where(torch.sqrt(torch.sum((samples_y-self.shift)**2, axis=-1)) -self.r > 0,0,1).detach().bool()
+            # samples_x = pts_proj(samples_x,self.r,self.shift)
+            # samples_y = pts_proj(samples_y,self.r,self.shift)
             out_p_x = self.pressure_field(samples_x)
             out_p_y = self.pressure_field(samples_y)
-            # out_p_x[mask1] = out_p[mask1].detach()
-            # out_p_y[mask2] = out_p[mask2].detach()
+            out_p_x[mask_right_1] = 0
+            # out_p_x[mask1] = out_p[mask1]
+            # out_p_y[mask2] = out_p[mask2]
             samples_x_ = samples.clone()
             samples_y_ = samples.clone()
             samples_x_[:,0] -= 1/rec
@@ -173,32 +169,50 @@ class Fluid2DModel(BaseModel):
             # mask2_ = torch.where(torch.logical_and(samples_y_[:,1]<1,samples_y_[:,1]>-1),0,1).detach()
             samples_x_ = torch.clamp(samples_x_, min=-1.0, max=1.0)
             samples_y_ = torch.clamp(samples_y_, min=-1.0, max=1.0)
+            
+            # samples_x_ = pts_proj(samples_x_,self.r,self.shift)
+            # samples_y_ = pts_proj(samples_y_,self.r,self.shift)       
+            # mask1_ = torch.where(torch.logical_and(samples_x_[:,0]<1,samples_x_[:,0]>-1),0,1).detach().bool()
+            # mask2_ = torch.where(torch.logical_and(samples_y_[:,1]<1,samples_y_[:,1]>-1),0,1).detach().bool()
+
+            #mask1_ = mask1_ | torch.where(torch.sqrt(torch.sum((samples_x_-self.shift)**2, axis=-1)) -self.r > 0,0,1).detach().bool()
+            #mask2_ = mask2_ | torch.where(torch.sqrt(torch.sum((samples_y_-self.shift)**2, axis=-1)) -self.r > 0,0,1).detach().bool()
+            
             out_p_x_ = self.pressure_field(samples_x_)
             out_p_y_ = self.pressure_field(samples_y_)
-            # out_p_x_[mask1_] = out_p[mask1_].detach()
-            # out_p_y_[mask2_] = out_p[mask2_].detach()
+            # out_p_x_[mask1_] = out_p[mask1_]
+            # out_p_y_[mask2_] = out_p[mask2_]
             lap_p = (out_p_x+out_p_y+out_p_x_+out_p_y_-4*out_p)/(1/rec*1/rec)
-
+            #print(lap_p[10])
         else:
             lap_p,grad_p = laplace(out_p, samples, return_grad=True)
+
+        # else:
+
+        # lap_p,grad_p = laplace(out_p, samples, return_grad=True)
         # print(lap_p[100:110],div_u[100:110],grad_p[100:110])
         
-        grad_lap = gradient(lap_p,samples)
+        # grad_lap = gradient(lap_p,samples)
         #print(torch.sum(grad_lap**2))
         
         loss = torch.mean((div_u - lap_p) ** 2) # FIXME: assume rho=1 here
         loss_dict = {'main': loss}
 
         # NOTE: neumann boundary condition, grad(p)\cdot norm(p) = 0
-        bc_sample_x = sample_boundary2D_separate(self.sample_resolution ** 2 // 100,side='horizontal', device=self.device).requires_grad_(True)
-        bc_sample_y = sample_boundary2D_separate(self.sample_resolution ** 2 // 100, side='vertical', device=self.device).requires_grad_(True)
-        bc_sample_x = torch.clamp(bc_sample_x, min=-1.0, max=1.0)
-        bc_sample_y = torch.clamp(bc_sample_y, min=-1.0, max=1.0)
+        bc_sample_x = sample_boundary2D_separate_list(self.sample_resolution ** 2 // 100, side=[2,3], device=self.device).requires_grad_(True)
+        bc_sample_y = sample_boundary2D_separate_list(self.sample_resolution ** 2 // 100, side=[0], device=self.device).requires_grad_(True)
+        grad_px = gradient(self.pressure_field(bc_sample_x), bc_sample_x)[..., 1]
+        grad_py = gradient(self.pressure_field(bc_sample_y), bc_sample_y)[..., 0]
 
-        grad_px = gradient(self.pressure_field(bc_sample_x), bc_sample_x)[..., 0]
-        grad_py = gradient(self.pressure_field(bc_sample_y), bc_sample_y)[..., 1]
+        # bc_sample_xp = sample_boundary2D_separate_list(self.sample_resolution ** 2 // 100, side=[1], device=self.device).requires_grad_(True)
+        # p_bc = self.pressure_field(bc_sample_xp)
 
-        bc_loss = torch.mean(grad_px ** 2) + torch.mean(grad_py ** 2)
+        bc_sdf_sample, sample_norm = sample_sdf(samples.shape[0] // 100,self.r,self.shift,device=self.device)
+        bc_sdf_sample = bc_sdf_sample.requires_grad_(True)
+        grad_sdf = gradient(self.pressure_field(bc_sdf_sample), bc_sdf_sample)
+        norm_dot = torch.sum(grad_sdf * sample_norm, -1) 
+
+        bc_loss = torch.mean(grad_px ** 2) + torch.mean((grad_py-self.init_entrance) ** 2)
         loss_dict.update({'bc': bc_loss})
 
         return loss_dict
@@ -213,25 +227,7 @@ class Fluid2DModel(BaseModel):
         
         p = self.pressure_field(samples)
         grad_p = gradient(p, samples).detach()
-        # rec = self.cfg.finest_resolution
-        # if self.cfg.network=='hashgrid':
-        #     samples_x = samples.clone()
-        #     samples_y = samples.clone()
-        #     samples_x[:,0] += 1/rec
-        #     samples_y[:,1] += 1/rec
-        #     out_p_x = self.pressure_field(samples_x)
-        #     out_p_y = self.pressure_field(samples_y)
-        #     samples_x_ = samples.clone()
-        #     samples_y_ = samples.clone()
-        #     samples_x_[:,0] -= 1/rec
-        #     samples_y_[:,1] -= 1/rec
-        #     out_p_x_ = self.pressure_field(samples_x_)
-        #     out_p_y_ = self.pressure_field(samples_y_)
-        #     grad_p[:,0] = (out_p_x-out_p_x_)/(2/rec)
-        #     grad_p[:,1] = (out_p_y-out_p_y_)/(2/rec)
-            
-        # grad_p = grad_p.detach()
-        print(grad_p[10])
+        #print(grad_p[10])
         target_u = prev_u - grad_p
         curr_u = self.velocity_field(samples)
         loss = torch.mean((curr_u - target_u) ** 2)
@@ -240,14 +236,18 @@ class Fluid2DModel(BaseModel):
 
         # FIXME: hard-coded zero boundary condition to sample 1% points near boundary
         #        and fixed factor 1.0 for boundary loss
-        bc_sample_x = sample_boundary2D_separate(samples.shape[0] // 100,side='horizontal', device=self.device).requires_grad_(True)
-        bc_sample_y = sample_boundary2D_separate(samples.shape[0] // 100, side='vertical', device=self.device).requires_grad_(True)
-        bc_sample_x = torch.clamp(bc_sample_x, min=-1.0, max=1.0)
-        bc_sample_y = torch.clamp(bc_sample_y, min=-1.0, max=1.0)
-        vel_x = self.velocity_field(bc_sample_x)[..., 0]
-        vel_y = self.velocity_field(bc_sample_y)[..., 1]
-        bc_loss = (torch.mean(vel_x ** 2) + torch.mean(vel_y ** 2))
+        
+        bc_sample_x = sample_boundary2D_separate_list(samples.shape[0] // 100, side=[2,3], device=self.device).requires_grad_(True)
+        bc_sample_y = sample_boundary2D_separate_list(samples.shape[0] // 100, side=[0], device=self.device).requires_grad_(True)
+        vel_x = self.velocity_field(bc_sample_x)[..., 1]
+        vel_y = self.velocity_field(bc_sample_y)[..., 0]
+        bc_sdf_sample,sample_norm = sample_sdf(samples.shape[0] // 100,self.r,self.shift,device=self.device)
+        bc_sdf_sample = bc_sdf_sample.requires_grad_(True)
+        vel_sdf = self.velocity_field(bc_sdf_sample)
+        norm_dot = torch.sum(vel_sdf * sample_norm,-1) 
+        bc_loss = (torch.mean(vel_x ** 2) + torch.mean((vel_y-self.init_entrance) ** 2)) * 1.0
         loss_dict.update({"bc": bc_loss})
+
         return loss_dict
 
     def _vis_advect_velocity(self):
@@ -258,15 +258,17 @@ class Fluid2DModel(BaseModel):
 
         backtracked_position = grid_samples - prev_u_grid * self.cfg.dt
         backtracked_position = torch.clamp(backtracked_position, min=-1.0, max=1.0)
+        #backtracked_position = pts_proj(backtracked_position,self.r,self.shift)
         
         with torch.no_grad():
             advected_u = self.velocity_field_prev(backtracked_position.reshape(-1,2)).detach().reshape(self.vis_resolution,self.vis_resolution,-1)
-
         mse = torch.mean((curr_u_grid - advected_u) ** 2, dim=-1).detach().cpu().numpy()
         curr_u_grid = curr_u_grid.detach().cpu().numpy()
+        advected_u = advected_u.detach().cpu().numpy()
         grid_samples = grid_samples.detach().cpu().numpy()
         self.tb.add_figure('adv_mse', draw_scalar_field2D(mse), global_step=self.train_step)
         self.tb.add_figure('adv_u', draw_vector_field2D(curr_u_grid, grid_samples), global_step=self.train_step)
+        self.tb.add_figure('adv_u_prev', draw_vector_field2D(advected_u, grid_samples), global_step=self.train_step)
 
     def _vis_solve_pressure(self):
         """visualization on tb during training"""

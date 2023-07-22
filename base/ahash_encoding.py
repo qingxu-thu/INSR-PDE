@@ -80,12 +80,17 @@ class Simple_MLP(nn.Module):
         self.input_dim = dim
         self.output_dim = out_dim
         in_dim = dim
+        #self.bn = nn.BatchNorm1d(self.output_dim, affine=True)
         for out_dim in mlp_units:
             layers.append(nn.Linear(in_dim, out_dim))
             layers.append(nn.ReLU(inplace=True))
             in_dim = out_dim
+            # layers.append(torch.nn.LayerNorm(out_dim))
         layers.append(nn.Linear(in_dim, self.output_dim))
+        # layers.append(torch.nn.layer_norm)
         self.model = nn.Sequential(*layers)
+        print(self.model)
+        #self.model.apply(self.weight_init)
     
     def forward(self, x: torch.tensor):
         return self.model(x)
@@ -218,18 +223,26 @@ class MultiResHashGrid(nn.Module):
                     "n_features_per_level":self.n_features_per_level,
                     "log2_hashmap_size": self.log2_hashmap_size,
                     "base_resolution": self.base_resolution,
-                    "interpolation": "linear",
+                    "interpolation": cfg.interpolation,
                 },dtype=torch.float32
                 )
+        self.factor = cfg.factor
         #nn.init.uniform_(self.grid_encoder.weight, a=-0.01, b=0.01)
         self.grid_in_dim = self.grid_encoder.n_output_dims
         self.simple_mlp = Simple_MLP(self.grid_in_dim, out_dim, cfg.mlp_units).to('cuda')
+        #self.simple_mlp = MLP(self.grid_in_dim, out_dim, cfg.num_hidden_layers,cfg.hidden_features,cfg.nonlinearity).to('cuda')
+        
+        self.scale_factor = 1
+        
+    def reset_scale_factor(self,val):
+        self.scale_factor = val
 
     def forward(self, x: torch.Tensor):
         #print(x.shape,self.dim)
+        x = x/self.factor
         x = x/2 + 0.5
-        a = self.grid_encoder(x)
-        return self.simple_mlp(a)
+        a = self.grid_encoder(x) 
+        return self.simple_mlp(a)  * self.scale_factor
     
 
 

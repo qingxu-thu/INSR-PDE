@@ -1,19 +1,19 @@
 python main.py fluid \
-    --tag fluid2d_tlgnM_hash4 \
+    --tag fluid2d_tlgnM_hash8 \
     --init_cond taylorgreen_multi \
     --num_hidden_layers 3 \
     --hidden_features 32 \
-    -sr 128 \
+    -sr 200 \
     -vr 32 \
     --dt 0.05 \
-    -T 20 \
-    -g 1 \
-    --lr 1e-3\
-    --early_stop \
+    -T 100 \
+    -g 0 \
+    --nonlinearity sine\
+    --lr 1e-4\
     --n_levels 5 \
     --n_features_per_level 4 \
     --log2_hashmap_size 19 \
-    --base_resolution 4 \
-    --finest_resolution 64 \
-    --mlp_unit "[32]" \
-    --network hashgrid
+    --base_resolution 8 \
+    --finest_resolution 128 \
+    --mlp_unit "[32,32,32]" \
+    --network hashgrid          

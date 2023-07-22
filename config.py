@@ -76,10 +76,12 @@ class Config(object):
         parser_adv = subparsers.add_parser("advection", parents=[parent_parser])
         parser_flu = subparsers.add_parser("fluid", parents=[parent_parser])
         parser_ela = subparsers.add_parser("elasticity", parents=[parent_parser])
+        parser_flow_flu = subparsers.add_parser("flow_fluid", parents=[parent_parser])
         if self.is_train:
             self._add_advection_config_(parser_adv)
             self._add_fluid_config_(parser_flu)
             self._add_elasticity_config_(parser_ela)
+            self._add_flow_fluid_config_(parser_flow_flu)
 
 
         args = parser.parse_args()
@@ -102,11 +104,15 @@ class Config(object):
         group.add_argument('--base_resolution',type=int, default=64)
         group.add_argument('--finest_resolution',type=int, default=2048)
         group.add_argument('--mlp_units',type=json.loads, default="[32]")
+        group.add_argument('--inner_sine',type=int, default=0)
+        group.add_argument('--factor',type=float, default=1.2)
+        group.add_argument('--interpolation',type=str, default='Smoothstep')
 
     def _add_network_config_(self, parser):
         """add hyperparameters for network architecture"""
         group = parser.add_argument_group('network')
         group.add_argument('--network', type=str, default='siren', choices=['siren', 'grid', 'hashgrid'])
+        group.add_argument('--optim_type', type=str, default="exp", help="desired checkpoint to restore")
         group.add_argument('--num_hidden_layers', type=int, default=3)
         group.add_argument('--hidden_features', type=int, default=64)
         group.add_argument('--nonlinearity',type=str, default='sine')
@@ -143,6 +149,11 @@ class Config(object):
 
     def _add_fluid_config_(self, parser):
         pass
+
+    def _add_flow_fluid_config_(self, parser):
+        group = parser.add_argument_group('flow_fluid')
+        group.add_argument('--ent_v', type=float, default=8.)
+        
 
     def _add_elasticity_config_(self, parser):
         group = parser.add_argument_group('elasticity')
