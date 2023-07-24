@@ -61,7 +61,7 @@ class BaseModel(ABC):
             # param_list.append({"params": net.levels.parameters(), "lr": 1e-5})
             # param_list.append({"params": net.simple_mlp.parameters(), "lr": 1e-5})
         self.optimizer = torch.optim.Adam(param_list)
-        expo_gamma = 0.0001 ** (1 / self.cfg.max_n_iters)
+        expo_gamma = 0.00001 ** (1 / self.cfg.max_n_iters)
         if self.cfg.optim_type == "exp":
             self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=expo_gamma)
         elif self.cfg.optim_type == "plateau":

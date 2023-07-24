@@ -1,7 +1,7 @@
 import torch
 
 
-def sample_boundary2D_separate_list(N, side, epsilon=1e-4, device='cpu'):
+def sample_boundary2D_separate_list(N, side, epsilon=1e-6, device='cpu'):
     """sample boundary points within a small range. NOTE: random samples, not uniform"""
     bound_list = [[[-1, -1 + epsilon], [-1, 1]], # left
                     [[1 - epsilon, 1], [-1, 1]], # right

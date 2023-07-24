@@ -17,7 +17,7 @@ def draw_vector_field2D(vel, coords):
 
 
 def draw_scalar_field2D(arr, vmin=None, vmax=None, cmap=None):
-    multi = max(arr.shape[0] // 512, 1)
+    multi = max(arr.shape[1] // 512, 1)
     fig, ax = plt.subplots(figsize=(5 * multi, 5 * multi))
     cax1 = ax.matshow(arr, vmin=vmin, vmax=vmax, cmap=cmap)
     fig.colorbar(cax1, ax=ax, fraction=0.046, pad=0.04)

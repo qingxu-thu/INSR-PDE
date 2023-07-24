@@ -49,5 +49,5 @@ def vortex_flow(samples,grid_size, init_entrance, scale=0.5):
     gap = 1/grid_size/scale
     vel = torch.zeros_like(samples)
     mask = (samples[..., 0] <= -1 + gap)
-    vel[mask,0] += init_entrance
+    vel[mask,0] += torch.clamp((-1-samples[mask, 0])/gap+1,min=0)
     return vel
